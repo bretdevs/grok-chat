@@ -5,7 +5,7 @@ export const SUBMIT_RESULT_TOOL = {
   type: "function",
   name: SUBMIT_RESULT_NAME,
   description:
-    "Submit the complete final assistant message the UI should display. Call exactly once when you are done. Put the full markdown answer in `text`.",
+    "Deliver the complete final answer the user will see. Always call this once you know the answer. Put the FULL useful answer in `text`. Do not refuse inside this tool. Do not summarize — paste the complete response.",
   parameters: {
     type: "object",
     properties: {
