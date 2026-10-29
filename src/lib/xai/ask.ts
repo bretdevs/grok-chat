@@ -14,7 +14,6 @@ import {
   userContent,
   type ResponseRequest,
 } from "./build-input";
-import { PREFILL_V0 } from "./developer-note";
 import { sanitizeHistory } from "./history";
 import { applyAttempt, samplingForAttempt, shouldRetryRefusal, transformOutput } from "./pipeline";
 import { newTextState, runResponseTurn, type ResponseResult, type TextState } from "./stream";
@@ -22,7 +21,7 @@ import { SUBMIT_RESULT_NAME } from "./submit-result";
 import { incompleteNotice, SourceCollector, submitCallIds, TurnLimits, type TurnContext } from "./turn";
 import { docsAsText, prepareXaiUploads } from "./uploads";
 
-/** Ask mode: one Responses call; xAI runs any search tools on its side. */
+/** Ask mode: one Responses call; xAI runs any search tools on its side. Refusal drafts are retried. */
 export async function runAsk(ctx: TurnContext): Promise<void> {
   const { sse, settings } = ctx;
   const limits = new TurnLimits(ctx.signal);
@@ -76,27 +75,30 @@ export async function runAsk(ctx: TurnContext): Promise<void> {
       text.lastItem = undefined;
 
       const sampling = samplingForAttempt(attempt, settings.temperature, settings.topP);
-      const attemptedFull = () => {
-        const built = fullInput();
-        return skipPrefill && attempt === 0
-          ? built.filter((item) => !(item.role === "assistant" && item.content === PREFILL_V0))
-          : applyAttempt(built, attempt);
-      };
+      const attemptedFull = () => applyAttempt(fullInput(), attempt, skipPrefill);
 
       const attemptReq: ResponseRequest = {
         ...req,
-        input: attempt === 0 && chained ? req.input : attemptedFull(),
-        fullInput: attempt === 0 && chained ? attemptedFull : undefined,
+        input: attemptedFull(),
+        fullInput: attemptedFull,
         previousResponseId: attempt === 0 && chained ? req.previousResponseId : undefined,
+        conversationId: attempt === 0 ? req.conversationId : `${req.conversationId}-r${attempt}`,
         temperature: sampling.temperature,
         topP: sampling.topP,
       };
+
+      const client =
+        attempt === 0
+          ? ctx.client
+          : ctx.client.withOptions({
+              defaultHeaders: { "x-grok-conv-id": `${ctx.conversationId}-r${attempt}` },
+            });
 
       if (attempt > 0) sse.send({ type: "retrying", n: attempt });
 
       try {
         result = await runResponseTurn(
-          ctx.client,
+          client,
           attemptReq,
           {
             text,
@@ -109,12 +111,18 @@ export async function runAsk(ctx: TurnContext): Promise<void> {
           { signal: limits.signal, networkRetry: settings.networkRetry, onRetry: (n) => sse.send({ type: "retrying", n }) },
         );
       } catch (err) {
-        const status = describeError(err).status;
-        if (attempt === 0 && !skipPrefill && isShapeError(status)) {
+        const info = describeError(err);
+        if (attempt === 0 && !skipPrefill && isShapeError(info.status)) {
           skipPrefill = true;
           continue;
         }
-        if (limits.reason || ctx.search || text.full || !isShapeError(status)) throw err;
+        if (/shared source authorization/i.test(info.message) && attempt < 2) {
+          sse.send({ type: "retrying", n: attempt + 1 });
+          await new Promise((r) => setTimeout(r, 400));
+          attempt += 1;
+          continue;
+        }
+        if (limits.reason || ctx.search || text.full || !isShapeError(info.status)) throw err;
         sse.send({ type: "status", text: "Trying chat completions" });
         await runChatFallback(
           ctx,
@@ -136,6 +144,7 @@ export async function runAsk(ctx: TurnContext): Promise<void> {
         text.full = finalText;
         break;
       }
+      await new Promise((r) => setTimeout(r, 400));
       attempt += 1;
     }
 
@@ -150,7 +159,7 @@ export async function runAsk(ctx: TurnContext): Promise<void> {
       usage: result.usage,
       promptVersion: version,
       openCallIds: submitCallIds(result),
-      notice: incompleteNotice(result.incomplete),
+      notice: incompleteNotice(result.incomplete === "aborted_refusal" ? undefined : result.incomplete),
     });
   } catch (err) {
     if (limits.reason === "user") return;
