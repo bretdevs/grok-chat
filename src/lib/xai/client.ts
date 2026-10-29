@@ -53,6 +53,7 @@ export function describeError(err: unknown): ErrorInfo {
 }
 
 export function isUserAbort(err: unknown, signal?: AbortSignal): boolean {
+  if (signal && !signal.aborted) return false;
   return Boolean(signal?.aborted) || err instanceof APIUserAbortError || (err instanceof Error && err.name === "AbortError");
 }
 
