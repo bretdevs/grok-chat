@@ -25,7 +25,7 @@ import {
 } from "@/lib/types";
 import { errorText, formatBytes, uid } from "@/lib/utils";
 import { mergeSources } from "@/lib/xai/citations";
-import { fetchServerConfig, killSandbox, pauseSandbox, RequestError, streamChat } from "./api";
+import { fetchServerConfig, killSandbox, pauseSandbox, RequestError, streamChat, type ApiEndpoint } from "./api";
 import { blobToDataUrl, deleteBlobs, getBlob, listBlobKeys, putBlob } from "./blob-store";
 import { beginSandboxUpload, uploadToSandbox, uploadToXai } from "./upload";
 import {
@@ -77,6 +77,7 @@ export function useChat(notify: Notify) {
   const [activeId, setActiveId] = useState<string | null>(() => readString(STORAGE_KEYS.active) || null);
   const [serverE2b, setServerE2b] = useState(false);
   const [limits, setLimits] = useState<UploadLimits>(DEFAULT_LIMITS);
+  const [endpoint, setEndpoint] = useState<ApiEndpoint>({ host: "api.x.ai", custom: false });
   const [runs, setRuns] = useState<Record<string, RunState>>({});
   const [settings, setSettings] = useState<SettingsState>({ open: false });
 
@@ -124,6 +125,7 @@ export function useChat(notify: Notify) {
         if (!alive) return;
         setServerE2b(config.e2bServerKey);
         if (config.uploads) setLimits(config.uploads);
+        if (config.endpoint) setEndpoint(config.endpoint);
       })
       .catch(() => undefined);
     // Drop stored blobs that no conversation points at any more.
@@ -170,7 +172,7 @@ export function useChat(notify: Notify) {
   const onTurnError = (status: number | undefined, source: ErrorSource | undefined, message: string) => {
     if (status !== 401) return;
     if (source === "e2b") openSettings("e2b", message || "E2B rejected this API key.");
-    else openSettings("xai", "xAI rejected this API key. Enter a valid key.");
+    else openSettings("xai", `${endpoint.custom ? endpoint.host : "xAI"} rejected this API key. Enter a valid key.`);
   };
 
   const runTurn = async (p: { conv: Conversation; history: ChatMessage[]; user: ChatMessage; uploads: Upload[]; appendUser: boolean }) => {
@@ -356,7 +358,7 @@ export function useChat(notify: Notify) {
     const trimmed = text.trim();
     if (!trimmed && !pending.length) return false;
     if (!apiKey) {
-      openSettings("xai", "Add your xAI API key to start.");
+      openSettings("xai", endpoint.custom ? "Add your API key to start." : "Add your xAI API key to start.");
       return false;
     }
     if (active && runs[active.id]) return false;
@@ -500,6 +502,7 @@ export function useChat(notify: Notify) {
     e2bKey,
     setE2bKey,
     serverE2b,
+    endpoint,
     extraInstructions,
     setExtraInstructions,
     model,

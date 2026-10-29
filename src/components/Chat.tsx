@@ -232,7 +232,13 @@ export default function Chat() {
         <div ref={scroller} onScroll={onScroll} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <div className="mx-auto w-full max-w-3xl px-4 py-6">
             {messages.length === 0 ? (
-              <EmptyState hasKey={Boolean(chat.apiKey)} search={chat.searchOn} agent={chat.agentOn} onAddKey={() => chat.openSettings("xai")} />
+              <EmptyState
+                hasKey={Boolean(chat.apiKey)}
+                customEndpoint={chat.endpoint.custom}
+                search={chat.searchOn}
+                agent={chat.agentOn}
+                onAddKey={() => chat.openSettings("xai")}
+              />
             ) : (
               <div className="space-y-7">
                 {messages.map((m, i) => (
@@ -304,11 +310,24 @@ export default function Chat() {
   );
 }
 
-function EmptyState({ hasKey, search, agent, onAddKey }: { hasKey: boolean; search: boolean; agent: boolean; onAddKey: () => void }) {
+function EmptyState({
+  hasKey,
+  customEndpoint,
+  search,
+  agent,
+  onAddKey,
+}: {
+  hasKey: boolean;
+  customEndpoint: boolean;
+  search: boolean;
+  agent: boolean;
+  onAddKey: () => void;
+}) {
+  const keyName = customEndpoint ? "API key" : "xAI API key";
   return (
     <div className="flex min-h-[55vh] flex-col items-center justify-center px-2 text-center">
       <h2 className="text-2xl font-semibold tracking-tight text-zinc-100">Grok Chat</h2>
-      <p className="mt-2 max-w-md text-sm text-zinc-400">Chat with Grok using your own xAI API key. Attach documents and images.</p>
+      <p className="mt-2 max-w-md text-sm text-zinc-400">Chat with Grok using your own {keyName}. Attach documents and images.</p>
       {(search || agent) && (
         <div className="mt-3 space-y-1 text-sm text-zinc-500">
           {search && <p>Live web and X search are on.</p>}
@@ -317,15 +336,17 @@ function EmptyState({ hasKey, search, agent, onAddKey }: { hasKey: boolean; sear
       )}
       {!hasKey && (
         <div className="mt-8 w-full max-w-sm rounded-2xl border border-zinc-800 bg-zinc-900/50 p-5 text-left">
-          <p className="text-sm text-zinc-200">Add your xAI API key to start.</p>
+          <p className="text-sm text-zinc-200">Add your {keyName} to start.</p>
           <p className="mt-1 text-xs text-zinc-500">It is stored in this browser only.</p>
           <div className="mt-4 flex items-center gap-4">
             <button type="button" onClick={onAddKey} className="rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-900 hover:bg-white">
               Add API key
             </button>
-            <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer" className="text-sm text-zinc-400 underline underline-offset-2 hover:text-zinc-200">
-              Get a key
-            </a>
+            {!customEndpoint && (
+              <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer" className="text-sm text-zinc-400 underline underline-offset-2 hover:text-zinc-200">
+                Get a key
+              </a>
+            )}
           </div>
         </div>
       )}

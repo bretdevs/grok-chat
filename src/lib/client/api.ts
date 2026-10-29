@@ -115,8 +115,13 @@ async function sandboxAction(action: "kill" | "pause", sandboxId: string, e2bKey
   }
 }
 
-export async function fetchServerConfig(): Promise<{ e2bServerKey: boolean; uploads?: UploadLimits }> {
+/** The API host the server sends model requests to; custom when it is not api.x.ai. */
+export type ApiEndpoint = { host: string; custom: boolean };
+
+export type ServerConfig = { e2bServerKey: boolean; uploads?: UploadLimits; endpoint?: ApiEndpoint };
+
+export async function fetchServerConfig(): Promise<ServerConfig> {
   const res = await fetch("/api/config", { cache: "no-store" });
   if (!res.ok) return { e2bServerKey: false };
-  return (await res.json()) as { e2bServerKey: boolean; uploads?: UploadLimits };
+  return (await res.json()) as ServerConfig;
 }

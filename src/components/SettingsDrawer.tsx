@@ -32,20 +32,24 @@ export function SettingsDrawer({ chat }: { chat: ChatState }) {
           <Section title="API keys">
             <KeyField
               id="xai-key"
-              label="xAI API key"
+              label={chat.endpoint.custom ? "API key" : "xAI API key"}
               value={chat.apiKey}
               onSave={chat.setApiKey}
-              placeholder="xai-…"
+              placeholder={chat.endpoint.custom ? "Your key" : "xai-…"}
               autoFocus={settings.focus === "xai" || (!settings.focus && !chat.apiKey)}
-              warn={(v) => (v && !v.startsWith("xai-") ? "xAI keys usually start with xai-." : "")}
+              warn={(v) => (!chat.endpoint.custom && v && !v.startsWith("xai-") ? "xAI keys usually start with xai-." : "")}
               hint={
-                <>
-                  Create one at{" "}
-                  <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer" className="text-zinc-300 underline underline-offset-2">
-                    console.x.ai
-                  </a>
-                  .
-                </>
+                chat.endpoint.custom ? (
+                  <>This server sends requests to {chat.endpoint.host}, so use a key from that provider.</>
+                ) : (
+                  <>
+                    Create one at{" "}
+                    <a href="https://console.x.ai" target="_blank" rel="noopener noreferrer" className="text-zinc-300 underline underline-offset-2">
+                      console.x.ai
+                    </a>
+                    .
+                  </>
+                )
               }
             />
             <KeyField
