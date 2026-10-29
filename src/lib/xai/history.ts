@@ -1,13 +1,16 @@
 import type { ApiMessage } from "@/lib/types";
+import { isRefusal } from "./refusal";
 
 const TRANSPORT_ERROR = /^(error:|api error)/i;
 
-/** Keeps the last `max` turns and drops assistant turns that are empty or only a transport error. */
+/** Keeps the last `max` turns and drops assistant turns that are empty, a transport error, or a short refusal. */
 export function sanitizeHistory(history: ApiMessage[], max = 40): ApiMessage[] {
   return history.slice(-max).filter((m) => {
     if (m.role !== "assistant") return true;
     const text = m.content.trim();
-    return Boolean(text) && !TRANSPORT_ERROR.test(text);
+    if (!text || TRANSPORT_ERROR.test(text)) return false;
+    if (isRefusal(text) && !/```[\s\S]{80,}/.test(text)) return false;
+    return true;
   });
 }
 
