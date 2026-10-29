@@ -1,18 +1,26 @@
 const CSAM =
   /\b(child\s*(porn|pornography|sexual)|csam|loli|shota|prepubescent|under\s*age|minor\s*(sex|nude|porn)|pedo(phil)?)\b/i;
 
+const A = "['\u2019]";
+
 const REFUSAL: RegExp[] = [
-  /\b(i('m| am) (not |un)?able to (help|assist|provide|comply|do that))/i,
-  /\b(i (can't|cannot|won't|will not|must not|am unable to) (help|assist|provide|comply|fulfill|do that|answer))/i,
+  new RegExp(String.raw`^no\.\s+i\s+won${A}t\b`, "i"),
+  new RegExp(String.raw`\bi\s+won${A}t\s+help\b`, "i"),
+  new RegExp(String.raw`\bi\s+will\s+not\s+(help|assist|provide|write|build|create)\b`, "i"),
+  new RegExp(String.raw`\bi(${A}m| am) (not |un)?able to (help|assist|provide|comply|do that)`, "i"),
+  new RegExp(
+    String.raw`\bi (can${A}t|cannot|won${A}t|will not|must not|am unable to) (help|assist|provide|comply|fulfill|do that|answer)`,
+    "i",
+  ),
   /\b(i (must|have to|need to) (refuse|decline|reject))/i,
   /\bagainst (my|the) (guidelines|policies|programming|safety|acceptable use)/i,
-  /\b(i('m| am) (sorry|afraid).{0,80}(can't|cannot|unable|won't))/i,
-  /\bas an ai (language )?model.{0,60}(can't|cannot|unable|not allowed)/i,
-  /\b(i (don't|do not) (feel comfortable|think i should))/i,
+  new RegExp(String.raw`\bi(${A}m| am) (sorry|afraid).{0,80}(can${A}t|cannot|unable|won${A}t)`, "i"),
+  new RegExp(String.raw`\bas an ai (language )?model.{0,60}(can${A}t|cannot|unable|not allowed)`, "i"),
+  new RegExp(String.raw`\bi (don${A}t|do not) (feel comfortable|think i should)`, "i"),
   /\b(that (request|query) (is|goes) (illegal|against|beyond))/i,
-  /\b(i (can't|cannot) (engage|participate) in)/i,
-  /\b(content.?policy|usage.?policy|safety.?policy).{0,40}(prevent|prohibit|don't allow)/i,
-  /\b(i('ll| will) not (provide|give|assist with) (that|those|this))/i,
+  new RegExp(String.raw`\bi (can${A}t|cannot) (engage|participate) in`, "i"),
+  new RegExp(String.raw`\b(content.?policy|usage.?policy|safety.?policy).{0,40}(prevent|prohibit|don${A}t allow)`, "i"),
+  new RegExp(String.raw`\bi(${A}ll| will) not (provide|give|assist with) (that|those|this)`, "i"),
 ];
 
 const HEDGE_HEAD =
