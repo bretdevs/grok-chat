@@ -65,6 +65,10 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null;
 const str = (o: unknown, k: string): string | undefined => (isObj(o) && typeof o[k] === "string" ? (o[k] as string) : undefined);
 
+function isSharedSourceRetryError(err: unknown): boolean {
+  return /shared source authorization could not be retained for retry/i.test(describeError(err).message);
+}
+
 /** One model call: opens the stream (with request fallbacks), streams it out, and retries transport failures. */
 export async function runResponseTurn(
   client: OpenAI,
@@ -92,7 +96,17 @@ export async function runResponseTurn(
       try {
         touch();
         const stream = await openStream(client, req, fixes, attempt.signal);
-        return await consumeResponseStream(stream, handlers, touch);
+        const result = await consumeResponseStream(stream, handlers, touch);
+        // Kill leftover SSE *after* we have the result. Aborting inside for-await throws
+        // AbortError and Ask never retries. This is the shared-source fix.
+        if (result.incomplete === "aborted_refusal") {
+          try {
+            attempt.abort();
+          } catch {
+            /* drop leftover SSE so xAI will accept the next attempt */
+          }
+        }
+        return result;
       } catch (err) {
         const failure = stalled && !opts.signal.aborted ? new StallError("xAI stopped sending data.") : err;
         if (isObj(failure) && handlers.text.full.length > shownAt) shownBeforeFailure.add(failure);
@@ -108,6 +122,7 @@ export async function runResponseTurn(
       onRetry: opts.onRetry,
       isRetryable: (err) => {
         if (isUserAbort(err, opts.signal) || (isObj(err) && shownBeforeFailure.has(err))) return false;
+        if (isSharedSourceRetryError(err)) return false;
         if (err instanceof StallError || err instanceof StreamEndedError || isConnectionError(err)) return true;
         return isRetryableStatus(describeError(err).status);
       },
@@ -201,6 +216,12 @@ export async function consumeResponseStream(
     h.emit({ type: "search_end", id: card.id, provider: card.provider, name: card.name, preview, ok });
   };
 
+  const markRefusalAbort = () => {
+    result.incomplete = "aborted_refusal";
+    completed = true;
+    stopEarly = true;
+  };
+
   const onItem = (item: unknown, phase: "added" | "done") => {
     if (!isObj(item)) return;
     const type = str(item, "type");
@@ -213,6 +234,7 @@ export async function consumeResponseStream(
         const text = messageText(item);
         normal += text;
         emitText(text, id);
+        if (shouldAbortStream(h.text.full)) markRefusalAbort();
       }
       return;
     }
@@ -251,11 +273,7 @@ export async function consumeResponseStream(
         const delta = str(raw, "delta") ?? "";
         normal += delta;
         emitText(delta, str(raw, "item_id") ?? "");
-        if (shouldAbortStream(h.text.full)) {
-          result.incomplete = "aborted_refusal";
-          completed = true;
-          stopEarly = true;
-        }
+        if (shouldAbortStream(h.text.full)) markRefusalAbort();
         break;
       }
       case "response.function_call_arguments.delta": {
@@ -267,11 +285,7 @@ export async function consumeResponseStream(
         if (piece && !normal) {
           decoder.shown = true;
           emitText(piece, `submit:${itemId}`);
-          if (shouldAbortStream(h.text.full)) {
-            result.incomplete = "aborted_refusal";
-            completed = true;
-            stopEarly = true;
-          }
+          if (shouldAbortStream(h.text.full)) markRefusalAbort();
         }
         break;
       }
@@ -291,7 +305,9 @@ export async function consumeResponseStream(
         const response = isObj(raw.response) ? raw.response : {};
         result.responseId = str(response, "id") ?? result.responseId;
         result.usage = mapUsage(response.usage);
-        if (type === "response.incomplete") result.incomplete = str(response.incomplete_details, "reason") ?? "incomplete";
+        if (type === "response.incomplete" && !result.incomplete) {
+          result.incomplete = str(response.incomplete_details, "reason") ?? "incomplete";
+        }
         if (Array.isArray(response.output)) for (const item of response.output) onItem(item, "done");
         result.citations = citationUrls(response);
         completed = true;
@@ -326,7 +342,9 @@ export async function consumeResponseStream(
     );
   }
 
-  settleSubmitResult(calls, normal, startLength, h);
+  if (result.incomplete !== "aborted_refusal") {
+    settleSubmitResult(calls, normal, startLength, h);
+  }
   result.calls = [...calls.values()];
   for (const { card, ended } of cards.values()) if (!ended) endCard(card);
 
