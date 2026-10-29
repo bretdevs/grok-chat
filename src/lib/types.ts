@@ -16,6 +16,8 @@ export type UploadLimits = {
   xaiFileBytes: number;
   sandboxFileBytes: number;
 };
+/** The API host the server sends model requests to; custom when it is not api.x.ai. */
+export type ApiEndpoint = { host: string; custom: boolean };
 export const MAX_CONVERSATIONS = 30;
 export const MAX_MESSAGES = 200;
 

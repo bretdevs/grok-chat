@@ -11,6 +11,7 @@ import {
   MAX_SANDBOX_FILE_BYTES,
   MAX_XAI_FILE_BYTES,
   XAI_FILE_TTL_SECONDS,
+  type ApiEndpoint,
   type ApiMessage,
   type Attachment,
   type ChatMessage,
@@ -25,7 +26,7 @@ import {
 } from "@/lib/types";
 import { errorText, formatBytes, uid } from "@/lib/utils";
 import { mergeSources } from "@/lib/xai/citations";
-import { fetchServerConfig, killSandbox, pauseSandbox, RequestError, streamChat, type ApiEndpoint } from "./api";
+import { fetchServerConfig, killSandbox, pauseSandbox, RequestError, streamChat } from "./api";
 import { blobToDataUrl, deleteBlobs, getBlob, listBlobKeys, putBlob } from "./blob-store";
 import { beginSandboxUpload, uploadToSandbox, uploadToXai } from "./upload";
 import {
@@ -67,7 +68,8 @@ const DEFAULT_LIMITS: UploadLimits = {
 
 export const imageKey = (attachmentId: string) => `img:${attachmentId}`;
 
-export function useChat(notify: Notify) {
+/** `endpoint` comes from the server render, so key wording is right before /api/config answers. */
+export function useChat(notify: Notify, endpoint: ApiEndpoint) {
   const [apiKey, setApiKeyState] = useState(() => readString(STORAGE_KEYS.xaiKey));
   const [e2bKey, setE2bKeyState] = useState(() => readString(STORAGE_KEYS.e2bKey));
   const [extraInstructions, setExtraState] = useState(() => readString(STORAGE_KEYS.extraInstructions));
@@ -77,7 +79,6 @@ export function useChat(notify: Notify) {
   const [activeId, setActiveId] = useState<string | null>(() => readString(STORAGE_KEYS.active) || null);
   const [serverE2b, setServerE2b] = useState(false);
   const [limits, setLimits] = useState<UploadLimits>(DEFAULT_LIMITS);
-  const [endpoint, setEndpoint] = useState<ApiEndpoint>({ host: "api.x.ai", custom: false });
   const [runs, setRuns] = useState<Record<string, RunState>>({});
   const [settings, setSettings] = useState<SettingsState>({ open: false });
 
@@ -125,7 +126,6 @@ export function useChat(notify: Notify) {
         if (!alive) return;
         setServerE2b(config.e2bServerKey);
         if (config.uploads) setLimits(config.uploads);
-        if (config.endpoint) setEndpoint(config.endpoint);
       })
       .catch(() => undefined);
     // Drop stored blobs that no conversation points at any more.

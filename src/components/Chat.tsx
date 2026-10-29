@@ -4,7 +4,7 @@ import { ArrowDown, Menu, Plus, Upload } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { prepareImage } from "@/lib/client/images";
 import { useChat, type PendingFile } from "@/lib/client/use-chat";
-import { MAX_SANDBOX_FILE_BYTES, type ChatMessage } from "@/lib/types";
+import { MAX_SANDBOX_FILE_BYTES, type ApiEndpoint, type ChatMessage } from "@/lib/types";
 import { uid } from "@/lib/utils";
 import { Composer } from "./Composer";
 import { Message } from "./Message";
@@ -18,9 +18,9 @@ const BLOCKED = /\.(exe|dll|msi|scr|com|bat|cmd)$/i;
 const MAX_ATTACHMENTS = 10;
 const NO_MESSAGES: ChatMessage[] = [];
 
-export default function Chat() {
+export default function Chat({ endpoint }: { endpoint: ApiEndpoint }) {
   const { toasts, push: notify, dismiss } = useToasts();
-  const chat = useChat(notify);
+  const chat = useChat(notify, endpoint);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);

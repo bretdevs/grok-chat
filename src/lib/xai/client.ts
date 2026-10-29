@@ -1,8 +1,6 @@
 import OpenAI, { APIConnectionError, APIError, APIUserAbortError } from "openai";
 import type { ErrorSource } from "@/lib/types";
-
-/** Override only to point at a proxy or a local mock; the default is the public xAI API. */
-export const XAI_BASE_URL = process.env.XAI_BASE_URL?.trim() || "https://api.x.ai/v1";
+import { XAI_BASE_URL } from "./endpoint";
 
 export function createXai(apiKey: string, conversationId: string): OpenAI {
   return new OpenAI({
