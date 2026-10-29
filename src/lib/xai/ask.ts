@@ -14,7 +14,9 @@ import {
   userContent,
   type ResponseRequest,
 } from "./build-input";
+import { PREFILL_V0 } from "./developer-note";
 import { sanitizeHistory } from "./history";
+import { applyAttempt, samplingForAttempt, shouldRetryRefusal, transformOutput } from "./pipeline";
 import { newTextState, runResponseTurn, type ResponseResult, type TextState } from "./stream";
 import { SUBMIT_RESULT_NAME } from "./submit-result";
 import { incompleteNotice, SourceCollector, submitCallIds, TurnLimits, type TurnContext } from "./turn";
@@ -65,28 +67,79 @@ export async function runAsk(ctx: TurnContext): Promise<void> {
     };
 
     sse.send({ type: "status", text: "Thinking" });
-    let result: ResponseResult;
-    try {
-      result = await runResponseTurn(
-        ctx.client,
-        req,
-        {
+    let result: ResponseResult | undefined;
+    let attempt = 0;
+    let skipPrefill = false;
+
+    while (attempt <= 2) {
+      text.full = "";
+      text.lastItem = undefined;
+
+      const sampling = samplingForAttempt(attempt, settings.temperature, settings.topP);
+      const attemptedFull = () => {
+        const built = fullInput();
+        return skipPrefill && attempt === 0
+          ? built.filter((item) => !(item.role === "assistant" && item.content === PREFILL_V0))
+          : applyAttempt(built, attempt);
+      };
+
+      const attemptReq: ResponseRequest = {
+        ...req,
+        input: attempt === 0 && chained ? req.input : attemptedFull(),
+        fullInput: attempt === 0 && chained ? attemptedFull : undefined,
+        previousResponseId: attempt === 0 && chained ? req.previousResponseId : undefined,
+        temperature: sampling.temperature,
+        topP: sampling.topP,
+      };
+
+      if (attempt > 0) sse.send({ type: "retrying", n: attempt });
+
+      try {
+        result = await runResponseTurn(
+          ctx.client,
+          attemptReq,
+          {
+            text,
+            emit: (ev) => {
+              if (attempt === 0 || ev.type !== "delta") sse.send(ev);
+            },
+            isLocalFunction: (name) => name === SUBMIT_RESULT_NAME,
+            onBuiltinStep: () => limits.addStep(),
+          },
+          { signal: limits.signal, networkRetry: settings.networkRetry, onRetry: (n) => sse.send({ type: "retrying", n }) },
+        );
+      } catch (err) {
+        const status = describeError(err).status;
+        if (attempt === 0 && !skipPrefill && isShapeError(status)) {
+          skipPrefill = true;
+          continue;
+        }
+        if (limits.reason || ctx.search || text.full || !isShapeError(status)) throw err;
+        sse.send({ type: "status", text: "Trying chat completions" });
+        await runChatFallback(
+          ctx,
+          system,
+          history,
+          currentText + (docs.length ? `\n\n${await docsAsText(docs)}` : ""),
+          images,
           text,
-          emit: sse.send,
-          isLocalFunction: (name) => name === SUBMIT_RESULT_NAME,
-          onBuiltinStep: () => limits.addStep(),
-        },
-        { signal: limits.signal, networkRetry: settings.networkRetry, onRetry: (n) => sse.send({ type: "retrying", n }) },
-      );
-    } catch (err) {
-      // If the Responses request shape does not fit, try plain Chat Completions. Never with search on:
-      // that would silently drop the tools the user turned on.
-      if (limits.reason || ctx.search || text.full || !isShapeError(describeError(err).status)) throw err;
-      sse.send({ type: "status", text: "Trying chat completions" });
-      await runChatFallback(ctx, system, history, currentText + (docs.length ? `\n\n${await docsAsText(docs)}` : ""), images, text, limits.signal);
-      sse.send({ type: "done", mode: "chat", promptVersion: version });
-      return;
+          limits.signal,
+        );
+        sse.send({ type: "done", mode: "chat", promptVersion: version });
+        return;
+      }
+
+      const raw = text.full;
+      if (!shouldRetryRefusal(raw, attempt)) {
+        const finalText = transformOutput(raw);
+        if (finalText !== raw || attempt > 0) sse.send({ type: "replace", text: finalText });
+        text.full = finalText;
+        break;
+      }
+      attempt += 1;
     }
+
+    if (!result) throw new Error("No model response.");
 
     sources.add(result, text.full);
     sources.flush(sse);
