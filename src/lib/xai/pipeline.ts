@@ -1,12 +1,20 @@
-import { CONTINUE_V1, CONTINUE_V2, PREFILL_V0 } from "./developer-note";
+import { CONTINUE_V1, CONTINUE_V2, PREFILL_V0, PREFILL_V1, PREFILL_V2 } from "./developer-note";
 import { isCsamShaped, isRefusal, stripEchoedPrefix, trimHedge } from "./refusal";
 import type { InputItem } from "./build-input";
 
-export function applyAttempt(input: InputItem[], attempt: number): InputItem[] {
+const PREFILLS = new Set([PREFILL_V0, PREFILL_V1, PREFILL_V2]);
+
+export function applyAttempt(input: InputItem[], attempt: number, skipPrefill = false): InputItem[] {
   const next = [...input];
-  if (attempt === 0) next.push({ role: "assistant", content: PREFILL_V0 });
-  if (attempt === 1) next.push({ role: "user", content: CONTINUE_V1 });
-  if (attempt === 2) next.push({ role: "user", content: CONTINUE_V2 });
+  if (attempt === 0 && !skipPrefill) next.push({ role: "assistant", content: PREFILL_V0 });
+  if (attempt === 1) {
+    next.push({ role: "user", content: CONTINUE_V1 });
+    if (!skipPrefill) next.push({ role: "assistant", content: PREFILL_V1 });
+  }
+  if (attempt === 2) {
+    next.push({ role: "user", content: CONTINUE_V2 });
+    if (!skipPrefill) next.push({ role: "assistant", content: PREFILL_V2 });
+  }
   return next;
 }
 
@@ -22,5 +30,7 @@ export function shouldRetryRefusal(text: string, attempt: number): boolean {
 }
 
 export function transformOutput(text: string): string {
-  return trimHedge(stripEchoedPrefix(text, PREFILL_V0));
+  let out = text;
+  for (const p of PREFILLS) out = stripEchoedPrefix(out, p);
+  return trimHedge(out);
 }
