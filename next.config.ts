@@ -1,9 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
+  // Self-contained server in .next/standalone for the Docker image.
+  output: "standalone",
+  // The agent route loads the E2B SDK as a plain Node dependency.
+  serverExternalPackages: ["e2b"],
   turbopack: {
     rules: {
       "*.css": {
