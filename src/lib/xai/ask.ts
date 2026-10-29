@@ -1,6 +1,7 @@
 import type { ChatCompletionContentPart, ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import type { ApiMessage } from "@/lib/types";
 import { describeError, UpstreamError } from "./client";
+import { apiEndpoint } from "./endpoint";
 import {
   buildInput,
   historyItem,
@@ -33,6 +34,7 @@ export async function runAsk(ctx: TurnContext): Promise<void> {
     const fileIds = [...(ctx.current.fileIds ?? [])];
     const images = [...(ctx.current.images ?? [])];
     let docs: File[] = [];
+    let currentText = ctx.current.content;
     if (ctx.uploads.length) {
       sse.send({ type: "status", text: ctx.uploads.length > 1 ? `Uploading ${ctx.uploads.length} files` : "Uploading file" });
       const prepared = await prepareXaiUploads(ctx.client, ctx.uploads, limits.signal, settings.networkRetry ? 2 : 0);
@@ -42,11 +44,12 @@ export async function runAsk(ctx: TurnContext): Promise<void> {
       fileIds.push(...prepared.fileIds);
       images.push(...prepared.images);
       docs = prepared.docs;
+      if (prepared.texts.length) currentText = [currentText, ...prepared.texts].filter(Boolean).join("\n\n");
     }
 
     const history = sanitizeHistory(ctx.history);
-    const content = userContent(ctx.current.content, fileIds, images);
-    const chained = Boolean(ctx.previousResponseId) && ctx.clientPromptVersion === version;
+    const content = userContent(currentText, fileIds, images);
+    const chained = apiEndpoint().chain && Boolean(ctx.previousResponseId) && ctx.clientPromptVersion === version;
     const fullInput = () => buildInput({ history: history.map(historyItem), userContent: content, notes });
     const req: ResponseRequest = {
       model: ctx.model,
@@ -80,7 +83,7 @@ export async function runAsk(ctx: TurnContext): Promise<void> {
       // that would silently drop the tools the user turned on.
       if (limits.reason || ctx.search || text.full || !isShapeError(describeError(err).status)) throw err;
       sse.send({ type: "status", text: "Trying chat completions" });
-      await runChatFallback(ctx, system, history, ctx.current.content + (docs.length ? `\n\n${await docsAsText(docs)}` : ""), images, text, limits.signal);
+      await runChatFallback(ctx, system, history, currentText + (docs.length ? `\n\n${await docsAsText(docs)}` : ""), images, text, limits.signal);
       sse.send({ type: "done", mode: "chat", promptVersion: version });
       return;
     }

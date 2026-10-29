@@ -1,8 +1,9 @@
 import type OpenAI from "openai";
 import { XAI_FILE_TTL_SECONDS, type UploadResult } from "@/lib/types";
-import { extOf, isTextName, mimeFromName } from "@/lib/mime";
-import { clip } from "@/lib/utils";
+import { docBlock } from "@/lib/doc-block";
+import { extOf, mimeFromName } from "@/lib/mime";
 import { describeError } from "./client";
+import { documentText } from "./doc-text";
 
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
 const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
@@ -39,23 +40,43 @@ export async function uploadToXai(client: OpenAI, file: File, signal: AbortSigna
   }
 }
 
-export type PreparedUploads = { results: UploadResult[]; fileIds: string[]; images: string[]; docs: File[] };
+/** Set once this endpoint has answered that it has no Files API; later uploads then skip the SDK's retries. */
+let noFilesApi = false;
 
-/** Ask mode: documents go to the Files API, images become data URLs for input_image. */
+/** A document as the model gets it: an xAI file id, or its text when the endpoint has no Files API. */
+export type PreparedDoc = { fileId: string } | { text: string };
+
+export async function prepareDocument(client: OpenAI, file: File, signal: AbortSignal, retries: number): Promise<PreparedDoc> {
+  try {
+    return { fileId: await uploadToXai(client, file, signal, noFilesApi ? 0 : retries) };
+  } catch (err) {
+    // OpenAI-compatible gateways (new-api and its forks) answer 501 or 404 here, after checking the key.
+    const { status } = describeError(err);
+    if (signal.aborted || (status !== 404 && status !== 405 && status !== 501)) throw err;
+    noFilesApi = true;
+    return { text: await documentText(file) };
+  }
+}
+
+export type PreparedUploads = { results: UploadResult[]; fileIds: string[]; images: string[]; docs: File[]; texts: string[] };
+
+/** Ask mode: documents go to the Files API (or in as text where there is none), images become data URLs for input_image. */
 export async function prepareXaiUploads(
   client: OpenAI,
   uploads: { file: File; key?: string }[],
   signal: AbortSignal,
   retries: number,
 ): Promise<PreparedUploads> {
-  const prepared: PreparedUploads = { results: [], fileIds: [], images: [], docs: [] };
+  const prepared: PreparedUploads = { results: [], fileIds: [], images: [], docs: [], texts: [] };
   const settled = await Promise.all(
     uploads.map(async ({ file, key }) => {
       const kind = isImageFile(file) ? ("image" as const) : ("file" as const);
       const base = { key, name: file.name, bytes: file.size, kind };
       try {
         if (kind === "image") return { result: base, image: await fileToDataUrl(file) };
-        return { result: { ...base, fileId: await uploadToXai(client, file, signal, retries) }, doc: file };
+        const doc = await prepareDocument(client, file, signal, retries);
+        if ("text" in doc) return { result: { ...base, inline: true }, text: docBlock(file.name, doc.text) };
+        return { result: { ...base, fileId: doc.fileId }, doc: file };
       } catch (err) {
         if (signal.aborted) throw err;
         return { result: { ...base, error: describeError(err).message } };
@@ -66,6 +87,7 @@ export async function prepareXaiUploads(
     prepared.results.push(item.result);
     if ("image" in item && item.image) prepared.images.push(item.image);
     if ("doc" in item && item.doc) prepared.docs.push(item.doc);
+    if ("text" in item && item.text) prepared.texts.push(item.text);
     if ("fileId" in item.result && item.result.fileId) prepared.fileIds.push(item.result.fileId);
   }
   return prepared;
@@ -75,9 +97,9 @@ export async function prepareXaiUploads(
 export async function docsAsText(files: File[]): Promise<string> {
   const parts: string[] = [];
   for (const file of files) {
-    if (isTextName(file.name) || file.type.startsWith("text/")) {
-      parts.push(`--- file: ${file.name} ---\n${clip(await file.text(), 200_000)}\n--- end of ${file.name} ---`);
-    } else {
+    try {
+      parts.push(docBlock(file.name, await documentText(file)));
+    } catch {
       parts.push(`(The attached file ${file.name} could not be read in this fallback mode.)`);
     }
   }

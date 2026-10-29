@@ -5,7 +5,7 @@ import type { ErrorSource } from "@/lib/types";
 import { uploadLimits } from "@/lib/upload-limits";
 import { formatBytes } from "@/lib/utils";
 import { createXai, describeError } from "@/lib/xai/client";
-import { uploadToXai } from "@/lib/xai/uploads";
+import { prepareDocument } from "@/lib/xai/uploads";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -17,7 +17,8 @@ const MIN_CHUNK_BYTES = 256 * 1024;
  * Uploads that happen before a chat turn, one file per request so the server never holds more
  * than one document (Ask) or one chunk (Agent) in memory. Keys come in headers, never in the URL.
  *
- *   POST ?target=xai                     raw file body          -> { fileId, bytes }
+ *   POST ?target=xai                     raw file body          -> { fileId, bytes }, or { text, bytes } when the
+ *                                                                  endpoint has no Files API (send the text inline)
  *   POST ?target=sandbox&step=begin      { conversationId, sandboxId? } -> { sandboxId, replaced }
  *   POST ?target=sandbox&step=chunk&sandboxId=&uploadId=&index=&chunkBytes=   raw chunk body -> { ok }
  *   POST ?target=sandbox&step=complete   { sandboxId, uploadId, name, size } -> { path, bytes }
@@ -51,8 +52,8 @@ async function toXai(req: Request) {
   if (bytes.byteLength > xaiFileBytes) return fail(413, `xAI accepts documents up to ${formatBytes(xaiFileBytes)}.`);
   const fromName = mimeFromName(name);
   const type = fromName !== "application/octet-stream" ? fromName : req.headers.get("content-type") || fromName;
-  const fileId = await uploadToXai(createXai(apiKey, "upload"), new File([bytes], name, { type }), req.signal, 2);
-  return Response.json({ fileId, bytes: bytes.byteLength });
+  const doc = await prepareDocument(createXai(apiKey, "upload"), new File([bytes], name, { type }), req.signal, 2);
+  return Response.json({ ...doc, bytes: bytes.byteLength });
 }
 
 async function begin(req: Request) {

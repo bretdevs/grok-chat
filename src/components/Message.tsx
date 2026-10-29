@@ -35,7 +35,7 @@ function UserMessage({ message }: { message: ChatMessage }) {
     size: a.size,
     kind: a.kind,
     blobKey: a.kind === "image" ? imageKey(a.id) : undefined,
-    detail: a.sandboxPath ?? (a.fileId ? "uploaded" : undefined),
+    detail: a.sandboxPath ?? (a.fileId ? "uploaded" : a.inline ? "sent as text" : undefined),
   }));
   return (
     <div className="flex flex-col items-end gap-2">

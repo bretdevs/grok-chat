@@ -6,8 +6,11 @@ type Progress = (fraction: number) => void;
 
 const PARALLEL_CHUNKS = 3;
 
+/** What /api/upload?target=xai returns: a file id, or the document's text when the endpoint has no Files API. */
+export type XaiUpload = { bytes: number; fileId?: string; text?: string };
+
 /** Ask mode: one document to the xAI Files API through /api/upload, with upload progress. */
-export function uploadToXai(blob: Blob, name: string, opts: { apiKey: string; signal: AbortSignal; onProgress: Progress }): Promise<{ fileId: string; bytes: number }> {
+export function uploadToXai(blob: Blob, name: string, opts: { apiKey: string; signal: AbortSignal; onProgress: Progress }): Promise<XaiUpload> {
   return new Promise((resolve, reject) => {
     if (opts.signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
     const xhr = new XMLHttpRequest();
@@ -20,7 +23,8 @@ export function uploadToXai(blob: Blob, name: string, opts: { apiKey: string; si
     };
     xhr.onload = () => {
       const body = parse(xhr.responseText);
-      if (xhr.status >= 200 && xhr.status < 300 && typeof body?.fileId === "string") resolve(body as { fileId: string; bytes: number });
+      const ok = typeof body?.fileId === "string" || typeof body?.text === "string";
+      if (xhr.status >= 200 && xhr.status < 300 && ok) resolve(body as XaiUpload);
       else reject(toError(xhr.status, body));
     };
     xhr.onerror = () => reject(new RequestError(`Uploading ${name} failed. Check your connection.`, 0));

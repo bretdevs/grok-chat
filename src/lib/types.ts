@@ -17,7 +17,12 @@ export type UploadLimits = {
   sandboxFileBytes: number;
 };
 /** The API host the server sends model requests to; custom when it is not api.x.ai. */
-export type ApiEndpoint = { host: string; custom: boolean };
+export type ApiEndpoint = {
+  host: string;
+  custom: boolean;
+  /** Whether turns are linked with previous_response_id; otherwise the full history is sent each time. */
+  chain: boolean;
+};
 export const MAX_CONVERSATIONS = 30;
 export const MAX_MESSAGES = 200;
 
@@ -45,6 +50,8 @@ export type Attachment = {
   uploadedAt?: number;
   /** Where the upload landed in the sandbox (Agent mode). */
   sandboxPath?: string;
+  /** Sent as text because the endpoint has no Files API; the text is in IndexedDB under docTextKey(id). */
+  inline?: boolean;
 };
 
 export type SearchProvider = "web" | "x" | "code";
@@ -126,6 +133,8 @@ export type UploadResult = {
   bytes: number;
   fileId?: string;
   path?: string;
+  /** The document went into the message as text (no Files API on this endpoint). */
+  inline?: boolean;
   error?: string;
 };
 

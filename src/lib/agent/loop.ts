@@ -3,6 +3,7 @@ import type { EventStream } from "@/lib/sse";
 import { sandboxBlock } from "@/lib/sandbox-paths";
 import { clip, errorText } from "@/lib/utils";
 import { describeError, UpstreamError, type ErrorInfo } from "@/lib/xai/client";
+import { apiEndpoint } from "@/lib/xai/endpoint";
 import {
   buildInput,
   historyItem,
@@ -85,7 +86,8 @@ export async function runAgent(ctx: AgentContext): Promise<void> {
 
     const history = sanitizeHistory(ctx.history).map(historyItem);
     const content = userContent(message, ctx.current.fileIds ?? [], images);
-    const chained = Boolean(ctx.previousResponseId) && ctx.clientPromptVersion === version;
+    const { chain } = apiEndpoint();
+    const chained = chain && Boolean(ctx.previousResponseId) && ctx.clientPromptVersion === version;
     const fullInput = () => buildInput({ history, userContent: content, notes });
     let req: ResponseRequest = {
       model: ctx.model,
@@ -100,8 +102,12 @@ export async function runAgent(ctx: AgentContext): Promise<void> {
       conversationId: ctx.conversationId,
     };
 
+    // What this turn has added after the user message (replies, calls, outputs), for resending in full
+    // when replies aren't chained or the previous response can't be found.
+    const turnItems: InputItem[] = [];
     for (let round = 0; ; round++) {
       sse.send({ type: "status", text: "Thinking" });
+      const roundStart = text.full.length;
       const result = await runResponseTurn(
         ctx.client,
         req,
@@ -151,8 +157,17 @@ export async function runAgent(ctx: AgentContext): Promise<void> {
         outputs.push(callOutput(call.callId, clip(JSON.stringify(outcome.forModel), OUTPUT_LIMIT)));
       }
       if (limits.reason) break;
+      const said = text.full.slice(roundStart).trim();
+      if (said) turnItems.push({ role: "assistant", content: said });
+      for (const call of result.calls) turnItems.push({ type: "function_call", call_id: call.callId, name: call.name, arguments: call.arguments });
+      turnItems.push(...outputs);
+      const resend = [...fullInput(), ...turnItems];
+      if (!chain) {
+        req = { ...req, input: resend, fullInput: undefined, previousResponseId: undefined };
+        continue;
+      }
       if (!result.responseId) throw new UpstreamError("xAI did not return a response id, so the tool loop could not continue.");
-      req = { ...req, input: outputs, fullInput: undefined, previousResponseId: result.responseId };
+      req = { ...req, input: outputs, fullInput: () => resend, previousResponseId: result.responseId };
     }
   } catch (err) {
     if (!limits.reason) failure = describeError(err);

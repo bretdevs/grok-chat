@@ -39,7 +39,7 @@ Both keys are saved in the browser's localStorage (`xai_api_key`, `e2b_api_key`)
 The browser never calls `api.x.ai` directly. `POST /api/chat` is a thin proxy that:
 
 - keeps the key out of cross-origin browser requests to xAI,
-- uploads documents to the Files API, and large files into the sandbox in chunks (`POST /api/upload`),
+- uploads documents to the Files API (or reads their text when the endpoint has none), and large files into the sandbox in chunks (`POST /api/upload`),
 - runs the Agent tool loop next to the E2B SDK.
 
 ## Settings
@@ -109,7 +109,7 @@ TODO: a live desktop view with `@e2b/desktop` (not in v1; headless screenshots o
 
 | What | Limit |
 | --- | --- |
-| Documents in Ask mode | 50 MB each, the xAI Files API limit. About 4.5 MB on Vercel, which caps request bodies. |
+| Documents in Ask mode | 50 MB each, the xAI Files API limit. About 4.5 MB on Vercel, which caps request bodies. On a gateway without a Files API, up to 200,000 characters of text per document. |
 | Files in Agent mode | 1 GB each. The browser sends them into the sandbox in 16 MB chunks (4 MB on Vercel), three at a time, so the server holds one chunk in memory at most. They land in `/home/user/uploaded`. |
 | Images | Resized in the browser to at most 2048 px on the long side and sent with the message. |
 | Files the agent sends back | 25 MB each (`get_sandbox_files`). |
@@ -174,7 +174,7 @@ curl "http://localhost:3000/api/upload?target=xai" \
   --data-binary @report.pdf
 ```
 
-It returns `{ "fileId": "file_…", "bytes": … }`, or 413 over 50 MB.
+It returns `{ "fileId": "file_…", "bytes": … }`, or 413 over 50 MB. When the endpoint has no Files API it returns `{ "text": "…", "bytes": … }` instead: put that text in the message.
 
 For Agent mode, upload into the sandbox in chunks (`x-e2b-key` header on every step, or the server's `E2B_API_KEY`):
 
@@ -202,12 +202,22 @@ For Agent mode, upload into the sandbox in chunks (`x-e2b-key` header on every s
 | `src/lib/xai/retry-network.ts` | Network retry. |
 | `src/lib/xai/history.ts` | Trims history before sending. |
 | `src/lib/xai/ask.ts` | Chat and Search turns. |
+| `src/lib/xai/doc-text.ts` | Reads text from documents when the endpoint has no Files API. |
 | `src/lib/agent/loop.ts` | The model and sandbox tool loop. |
 | `src/lib/agent/run-tools.ts` | Tool implementations against E2B. |
 
 The system message is `system-prompt.ts` plus short notes the server appends: the file download format, the search note when Search is on, the sandbox note in Agent mode, and a one-line model description.
 
-Follow-up turns pass `previous_response_id`, so earlier context, uploaded files and encrypted reasoning stay on xAI's side (xAI keeps responses for 30 days). When a chain cannot be used, the full history is sent instead.
+Follow-up turns pass `previous_response_id`, so earlier context, uploaded files and encrypted reasoning stay on xAI's side (xAI keeps responses for 30 days). When a chain cannot be used, the full history is sent instead. On a gateway the full history is always sent (see below).
+
+## Using a gateway instead of api.x.ai
+
+Set `XAI_BASE_URL` to an OpenAI-compatible gateway that serves Grok on the Responses API, such as a new-api deployment. The UI then asks for "your API key" and names the host. Two things change:
+
+- **Documents.** These gateways usually have no Files API, so the server reads text, PDF, DOCX and PPTX files and puts their text in the message, shown as "sent as text". Other formats, and scanned PDFs, need Agent mode, which copies files into the sandbox.
+- **History.** Turns are not linked with `previous_response_id`, because a gateway may send each request to a different upstream account. The full history goes with every turn, and Agent mode resends the turn so far after each tool round. Set `XAI_CHAIN_RESPONSES=on` if your gateway keeps response ids, or `off` to stop chaining on api.x.ai too.
+
+Search, X search, code execution and citations work only when the gateway passes them through to xAI.
 
 ## Deploy to Vercel
 

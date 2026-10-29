@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { docBlock } from "@/lib/doc-block";
 import { mimeFromName } from "@/lib/mime";
 import { decodeBase64 } from "@/lib/parse-files";
 import { sandboxBlock } from "@/lib/sandbox-paths";
@@ -67,6 +68,7 @@ const DEFAULT_LIMITS: UploadLimits = {
 };
 
 export const imageKey = (attachmentId: string) => `img:${attachmentId}`;
+const docTextKey = (attachmentId: string) => `doc:${attachmentId}`;
 
 /** `endpoint` comes from the server render, so key wording is right before /api/config answers. */
 export function useChat(notify: Notify, endpoint: ApiEndpoint) {
@@ -209,6 +211,7 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
         .filter((a) => a.sandboxPath && !reuploaded.has(a.id))
         .map((a) => ({ path: a.sandboxPath!, bytes: a.size }));
       const newFileIds: string[] = [];
+      const inlineDocs: string[] = [];
 
       // Documents are uploaded one per request before the turn starts: to xAI in Ask mode,
       // in chunks into the sandbox in Agent mode. Images stay small and travel with the turn.
@@ -243,18 +246,27 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
             sandboxFiles.push(saved);
           } else {
             const saved = await uploadToXai(doc.blob, doc.name, { apiKey, signal: controller.signal, onProgress: progress });
-            results.push({ key: doc.key, name: doc.name, kind: "file", bytes: saved.bytes, fileId: saved.fileId });
-            newFileIds.push(saved.fileId);
+            if (saved.fileId) {
+              results.push({ key: doc.key, name: doc.name, kind: "file", bytes: saved.bytes, fileId: saved.fileId });
+              newFileIds.push(saved.fileId);
+            } else {
+              // No Files API on this endpoint: the text goes in the message and stays in IndexedDB for later turns.
+              const text = saved.text ?? "";
+              await putBlob(docTextKey(doc.key), new Blob([text], { type: "text/plain" }));
+              results.push({ key: doc.key, name: doc.name, kind: "file", bytes: saved.bytes, inline: true });
+              inlineDocs.push(docBlock(doc.name, text));
+            }
           }
         }
         enqueue({ ...target, event: { type: "uploads", files: results } });
         setRunStatus(conv.id, "Sending");
       }
 
-      const previous = chainFrom(history, flags);
+      const previous = endpoint.chain ? chainFrom(history, flags) : undefined;
       const messages = await toApiMessages([...history, user], { includeImages: !previous, agent: flags.agent, reuploaded });
       const turn = messages.at(-1);
       if (turn && newFileIds.length) turn.fileIds = [...(turn.fileIds ?? []), ...newFileIds];
+      if (turn && inlineDocs.length) turn.content = [turn.content, ...inlineDocs].filter(Boolean).join("\n\n");
       const events = streamChat({
         apiKey,
         e2bKey: e2bKey || undefined,
@@ -422,6 +434,7 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
           continue;
         }
         if (!conv.agent && a.fileId && a.uploadedAt && Date.now() - a.uploadedAt < FILE_ID_TTL_MS) continue;
+        if (a.inline && (await getBlob(docTextKey(a.id)))) continue;
         if (conv.agent && a.sandboxPath) continue;
         const doc = docBlobs.current.get(a.id);
         if (doc) uploads.push({ key: a.id, blob: doc, name: a.name, kind: "file" });
@@ -564,6 +577,11 @@ async function toApiMessages(list: ChatMessage[], opts: { includeImages: boolean
     const onDisk = current ? [] : attachments.filter((a) => a.sandboxPath);
     let content = m.content;
     if (onDisk.length) content = [content, sandboxBlock(onDisk.map((a) => ({ path: a.sandboxPath!, bytes: a.size })))].filter(Boolean).join("\n\n");
+    for (const a of attachments) {
+      if (!a.inline || opts.reuploaded.has(a.id)) continue;
+      const blob = await getBlob(docTextKey(a.id));
+      if (blob) content = [content, docBlock(a.name, await blob.text())].filter(Boolean).join("\n\n");
+    }
     const images: string[] = [];
     if (!current && opts.includeImages) {
       for (const a of attachments) {
@@ -651,6 +669,7 @@ function mergeUploads(attachments: Attachment[] | undefined, results: UploadResu
       ...a,
       ...(r.fileId ? { fileId: r.fileId, uploadedAt: now } : {}),
       ...(r.path ? { sandboxPath: r.path } : {}),
+      ...(r.inline ? { inline: true } : {}),
     };
   });
 }
@@ -734,7 +753,10 @@ function settleTools(tools: ToolTrace[] | undefined, status: "done" | "error"): 
 function blobKeysOf(messages: ChatMessage[]): string[] {
   const keys: string[] = [];
   for (const m of messages) {
-    for (const a of m.attachments ?? []) if (a.kind === "image") keys.push(imageKey(a.id));
+    for (const a of m.attachments ?? []) {
+      if (a.kind === "image") keys.push(imageKey(a.id));
+      else if (a.inline) keys.push(docTextKey(a.id));
+    }
     for (const t of m.tools ?? []) if (t.screenshotKey) keys.push(t.screenshotKey);
     for (const f of m.files ?? []) keys.push(f.blobKey);
   }
