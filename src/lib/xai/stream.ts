@@ -9,7 +9,6 @@ import { isRetryableStatus, withNetworkRetry } from "./retry-network";
 import { parseSubmitText, SubmitTextStream, SUBMIT_RESULT_NAME } from "./submit-result";
 import { shouldAbortStream } from "./refusal";
 
-
 /** No stream event for this long counts as a dropped connection we own. */
 const STALL_MS = 120_000;
 
@@ -174,6 +173,7 @@ export async function consumeResponseStream(
   const cards = new Map<string, { card: BuiltinCard; ended: boolean }>();
   let normal = "";
   let completed = false;
+  let stopEarly = false;
 
   const emitText = (delta: string, itemId: string) => {
     if (!delta) return;
@@ -251,6 +251,11 @@ export async function consumeResponseStream(
         const delta = str(raw, "delta") ?? "";
         normal += delta;
         emitText(delta, str(raw, "item_id") ?? "");
+        if (shouldAbortStream(h.text.full)) {
+          result.incomplete = "aborted_refusal";
+          completed = true;
+          stopEarly = true;
+        }
         break;
       }
       case "response.function_call_arguments.delta": {
@@ -262,6 +267,11 @@ export async function consumeResponseStream(
         if (piece && !normal) {
           decoder.shown = true;
           emitText(piece, `submit:${itemId}`);
+          if (shouldAbortStream(h.text.full)) {
+            result.incomplete = "aborted_refusal";
+            completed = true;
+            stopEarly = true;
+          }
         }
         break;
       }
@@ -307,6 +317,7 @@ export async function consumeResponseStream(
         else startCard(card);
       }
     }
+    if (stopEarly) break;
   }
 
   if (!completed) {
