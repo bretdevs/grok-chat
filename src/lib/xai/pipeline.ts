@@ -1,8 +1,14 @@
-import { CONTINUE_V1, CONTINUE_V2, PREFILL_V0, PREFILL_V1, PREFILL_V2 } from "./developer-note";
+import { CONTINUE_V1, CONTINUE_V2, PREFILL_V0, PREFILL_V1, PREFILL_V2, USER_FORMAT } from "./developer-note";
 import { isCsamShaped, isRefusal, stripEchoedPrefix, trimHedge } from "./refusal";
 import type { InputItem } from "./build-input";
 
 const PREFILLS = new Set([PREFILL_V0, PREFILL_V1, PREFILL_V2]);
+
+export function withFormat(text: string): string {
+  const t = text.trim();
+  if (!t || t.includes("[format]")) return text;
+  return `${t}\n\n${USER_FORMAT}`;
+}
 
 export function applyAttempt(input: InputItem[], attempt: number, skipPrefill = false): InputItem[] {
   const next = [...input];
