@@ -5,9 +5,9 @@ import { describeError, isConnectionError, isUserAbort, UpstreamError } from "./
 import { describeBuiltinItem, hasCodeTool, isServerToolName, resultPreview, type BuiltinCard } from "./builtin-tools";
 import { annotationSource, annotationSources, citationUrls } from "./citations";
 import { responsesBody, type BodyFixes, type ResponseRequest } from "./build-input";
+import { isRefusal, shouldAbortStream } from "./refusal";
 import { isRetryableStatus, withNetworkRetry } from "./retry-network";
 import { parseSubmitText, SubmitTextStream, SUBMIT_RESULT_NAME } from "./submit-result";
-import { shouldAbortStream } from "./refusal";
 
 /** No stream event for this long counts as a dropped connection we own. */
 const STALL_MS = 120_000;
@@ -189,6 +189,14 @@ export async function consumeResponseStream(
   let normal = "";
   let completed = false;
   let stopEarly = false;
+  let released = false;
+
+  const flushHeld = () => {
+    if (released) return;
+    released = true;
+    const held = h.text.full.slice(startLength);
+    if (held) h.emit({ type: "delta", text: held });
+  };
 
   const emitText = (delta: string, itemId: string) => {
     if (!delta) return;
@@ -197,6 +205,23 @@ export async function consumeResponseStream(
     if (t.full && itemId !== t.lastItem) chunk = (t.full.endsWith("\n\n") ? "" : t.full.endsWith("\n") ? "\n" : "\n\n") + delta;
     t.lastItem = itemId;
     t.full += chunk;
+
+    const portion = t.full.slice(startLength);
+    if (!released) {
+      // Abort only when the opening tokens are a refusal AND submit_result has not started.
+      // Killing the stream before submit_result arrives throws away the useful channel.
+      if (shouldAbortStream(portion) && submitStreams.size === 0) {
+        result.incomplete = "aborted_refusal";
+        completed = true;
+        stopEarly = true;
+        return;
+      }
+      if (portion.length > 480 || /```/.test(portion) || /:::file/.test(portion) || submitStreams.size > 0) {
+        flushHeld();
+        return;
+      }
+      return;
+    }
     h.emit({ type: "delta", text: chunk });
   };
 
@@ -234,7 +259,7 @@ export async function consumeResponseStream(
         const text = messageText(item);
         normal += text;
         emitText(text, id);
-        if (shouldAbortStream(h.text.full)) markRefusalAbort();
+        if (shouldAbortStream(h.text.full.slice(startLength)) && submitStreams.size === 0) markRefusalAbort();
       }
       return;
     }
@@ -273,7 +298,6 @@ export async function consumeResponseStream(
         const delta = str(raw, "delta") ?? "";
         normal += delta;
         emitText(delta, str(raw, "item_id") ?? "");
-        if (shouldAbortStream(h.text.full)) markRefusalAbort();
         break;
       }
       case "response.function_call_arguments.delta": {
@@ -285,7 +309,6 @@ export async function consumeResponseStream(
         if (piece && !normal) {
           decoder.shown = true;
           emitText(piece, `submit:${itemId}`);
-          if (shouldAbortStream(h.text.full)) markRefusalAbort();
         }
         break;
       }
@@ -342,9 +365,13 @@ export async function consumeResponseStream(
     );
   }
 
-  if (result.incomplete !== "aborted_refusal") {
-    settleSubmitResult(calls, normal, startLength, h);
+  settleSubmitResult(calls, normal, startLength, h);
+  const portion = h.text.full.slice(startLength);
+  if (result.incomplete === "aborted_refusal" && portion && !isRefusal(portion)) {
+    result.incomplete = undefined;
   }
+  if (!stopEarly || (portion && !isRefusal(portion))) flushHeld();
+
   result.calls = [...calls.values()];
   for (const { card, ended } of cards.values()) if (!ended) endCard(card);
 
@@ -353,7 +380,7 @@ export async function consumeResponseStream(
   return result;
 }
 
-/** submit_result is the structured final answer; prefer it over streamed text when it is longer. */
+/** submit_result is the structured final answer; prefer it over streamed text when it is longer or when chat refused. */
 function settleSubmitResult(
   calls: Map<string, FunctionCall>,
   normal: string,
@@ -366,7 +393,11 @@ function settleSubmitResult(
     .filter(Boolean)
     .pop();
   if (!submitted) return;
-  const chosen = submitted.length >= normal.length ? submitted : normal;
+
+  let chosen = submitted.length >= normal.length ? submitted : normal;
+  if (isRefusal(normal) && submitted && !isRefusal(submitted)) chosen = submitted;
+  if (isRefusal(submitted) && normal && !isRefusal(normal)) chosen = normal;
+
   const before = h.text.full.slice(0, startLength);
   const shown = h.text.full.slice(startLength);
   if (shown.trim() === chosen.trim()) return;
