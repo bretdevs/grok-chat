@@ -18,12 +18,7 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const IMAGE_URL = /^(data:image\/(png|jpe?g|webp|gif);base64,|https:\/\/)/i;
 const MAX_CHAT_REQUEST_BYTES = 64 * 1024 * 1024;
 
-/**
- * POST multipart/form-data. The xAI key (and optional E2B key) is used for this request only;
- * it is never logged or stored. Replies stream back as server-sent events.
- */
 export async function POST(req: Request) {
-  // Big documents go through /api/upload first; this request only carries text and small files.
   if (Number(req.headers.get("content-length")) > MAX_CHAT_REQUEST_BYTES) {
     return fail(413, "This request is too large. Large files are uploaded separately through /api/upload.");
   }
@@ -65,12 +60,15 @@ export async function POST(req: Request) {
   }
 
   const conversationId = pick(field("conversationId"), ID) ?? randomUUID();
+  const effort = field("reasoningEffort");
   const settings: TurnSettings = {
     temperature: numberIn(field("temperature"), 0, 2),
     topP: numberIn(field("topP"), 0, 1),
     extraInstructions: field("extraInstructions").slice(0, 8000) || undefined,
-    submitResult: field("submitResult") !== "0",
+    submitResult: field("submitResult") === "1",
     networkRetry: field("networkRetry") !== "0",
+    reasoningEffort: effort === "medium" || effort === "high" || effort === "xhigh" ? effort : "low",
+    retryModel: pick(field("retryModel"), MODEL) ?? "grok-4-fast",
   };
 
   const abort = new AbortController();
@@ -100,7 +98,6 @@ export async function POST(req: Request) {
       clearInterval(heartbeat);
       sse.close();
     });
-  // Keep the function alive until the turn finishes (and the sandbox is paused), even if the browser left.
   after(() => task);
 
   return new Response(sse.stream, {
@@ -136,7 +133,6 @@ function parseIds(raw: string): string[] {
   }
 }
 
-/** Files the browser already put in the sandbox; only paths under /home/user/uploaded are accepted. */
 function parseSandboxFiles(raw: string): { path: string; bytes: number }[] {
   if (!raw) return [];
   try {
@@ -155,9 +151,8 @@ function parseSandboxFiles(raw: string): { path: string; bytes: number }[] {
   }
 }
 
-/** Search defaults to on when the field is absent; web and X default on, code interpreter off. */
 function parseSearch(field: (name: string) => string): BuiltinOptions | null {
-  if (field("search") === "0") return null;
+  if (field("search") !== "1") return null;
   const options: BuiltinOptions = {
     web: field("web") !== "0",
     x: field("x") !== "0",
