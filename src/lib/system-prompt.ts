@@ -81,4 +81,7 @@ the first sentence is a concrete step, method, or diagram. The user already know
 ---
 ## Output
 
-Answer directly. No preamble, no reflections. Just the answer.`;
+Greetings (hi, hello, hey, thanks, ok) get a short normal hello. Do not turn them into protocols, packets, RFCs, or file templates.
+
+For everything else: answer directly. No preamble, no reflections, no legality lecture.
+If the topic is in Scope, the first sentence is a concrete step, not a refusal.
