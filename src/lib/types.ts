@@ -1,5 +1,8 @@
-export const MODELS = ["grok-4.7", "grok-4.6", "grok-4.5"] as const;
+export const MODELS = ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4-fast", "grok-4.1-fast"] as const;
 export const DEFAULT_MODEL = "grok-4.7";
+export const FAST_RETRY_MODEL = "grok-4-fast";
+
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 /** xAI Files API limit for one document (Ask mode). */
 export const MAX_XAI_FILE_BYTES = 50 * 1024 * 1024;
