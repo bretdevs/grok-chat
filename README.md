@@ -1,6 +1,6 @@
 # Grok Chat
 
-A bring-your-own-key chat app for the xAI API. Each user pastes their own xAI key, which stays in their browser. Replies stream from `grok-4.7` through the Responses API.
+A chat app for the xAI API. Each user pastes their own xAI key, which stays in their browser, or you add a database and a key of your own and let people sign up (see Accounts). Replies stream from `grok-4.7` through the Responses API.
 
 - Streaming chat with markdown, code blocks with copy, and a conversation list.
 - Documents go to the xAI Files API (24 hour expiry, 50 MB each); images go to the model as `input_image`.
@@ -189,7 +189,9 @@ For Agent mode, upload into the sandbox in chunks (`x-e2b-key` header on every s
 
 ### Other routes
 
-`POST /api/sandbox` with `{ "action": "kill" | "pause", "sandboxId": "…", "e2bKey": "…" }` destroys or pauses a sandbox. `GET /api/config` reports whether the server has a fallback E2B key and the upload limits it accepts.
+`POST /api/sandbox` with `{ "action": "kill" | "pause", "sandboxId": "…", "e2bKey": "…" }` destroys or pauses a sandbox. `GET /api/config` reports whether the server has a fallback E2B key, the upload limits it accepts and the sign-in state of the caller.
+
+With accounts on, every route above needs the session cookie, and `apiKey` becomes optional. `POST /api/auth/signup` and `POST /api/auth/login` take `{ "email", "password" }` and set the cookie, `POST /api/auth/logout` clears it, and `GET /api/auth/me` returns the account with today's usage.
 
 ## How a request is built
 
@@ -204,11 +206,34 @@ For Agent mode, upload into the sandbox in chunks (`x-e2b-key` header on every s
 | `src/lib/xai/ask.ts` | Chat and Search turns. |
 | `src/lib/xai/doc-text.ts` | Reads text from documents when the endpoint has no Files API. |
 | `src/lib/agent/loop.ts` | The model and sandbox tool loop. |
+| `src/lib/auth/gate.ts` | Who may make a request and whose key pays for it. |
 | `src/lib/agent/run-tools.ts` | Tool implementations against E2B. |
 
 The system message is `system-prompt.ts` plus short notes the server appends: the file download format, the search note when Search is on, the sandbox note in Agent mode, and a one-line model description.
 
 Follow-up turns pass `previous_response_id`, so earlier context, uploaded files and encrypted reasoning stay on xAI's side (xAI keeps responses for 30 days). When a chain cannot be used, the full history is sent instead. On a gateway the full history is always sent (see below).
+
+## Accounts (optional)
+
+By default the app has no sign-in and every visitor brings their own key. Set `DATABASE_URL` to a Postgres database and the app puts a sign-in screen in front of everything instead. The tables (`users`, `sessions`, `usage_daily`) are created on the first request.
+
+Set `XAI_API_KEY` as well and signed-in people need no key of their own: their turns go out on the server's key, counted against a daily allowance. Anyone who adds their own key in Settings spends that instead, with no limit.
+
+| Variable | What it does |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string. Nothing else here matters without it. |
+| `XAI_API_KEY` | The key signed-in accounts spend. Leave it empty to make everyone bring their own. |
+| `DAILY_MESSAGE_LIMIT` | Messages per account per day on that key. 0 means no limit. Default 50. |
+| `ADMIN_EMAIL` | Addresses that become admins when they sign up, comma separated. The first account on an empty database is an admin anyway. |
+| `SIGNUP_OPEN` | `off` closes sign-up, so only existing accounts can get in. |
+| `SIGNUP_CODE` | When set, sign-up also asks for this code. |
+| `AUTH_REQUIRED` | `off` keeps the accounts but drops the login screen. |
+
+- Sign-up takes an email address and a password of at least 10 characters. Passwords are stored as scrypt hashes; nothing verifies the address, so use `SIGNUP_CODE` if that matters.
+- The session is a random token in an httpOnly cookie, good for 30 days and kept fresh while it is used. Only its hash is stored.
+- Sign-in and sign-up are rate limited per IP address, in the server's memory.
+- Admins get `/admin`: every account, what it has used today, its allowance, and a switch to turn an account off. Everyone else gets a 404 there.
+- Conversations still live in the browser, not in the database. On a shared browser, signing in as a different account clears the previous one's chats.
 
 ## Using a gateway instead of api.x.ai
 

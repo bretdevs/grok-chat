@@ -1,10 +1,13 @@
 import { killSandbox, pauseSandboxById } from "@/lib/agent/sandbox";
+import { requireAccount } from "@/lib/auth/gate";
 import { describeError } from "@/lib/xai/client";
 
 export const runtime = "nodejs";
 
 /** POST { action: "kill" | "pause", sandboxId, e2bKey? } destroys or pauses a conversation's sandbox. */
 export async function POST(req: Request) {
+  const denied = await requireAccount(req);
+  if (denied) return Response.json({ error: { message: denied.message } }, { status: denied.status });
   const body = (await req.json().catch(() => null)) as { action?: unknown; sandboxId?: unknown; e2bKey?: unknown } | null;
   const sandboxId = typeof body?.sandboxId === "string" ? body.sandboxId.trim() : "";
   if (!/^[\w-]{1,128}$/.test(sandboxId)) return Response.json({ error: { message: "sandboxId is required." } }, { status: 400 });

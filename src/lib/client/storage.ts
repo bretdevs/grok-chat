@@ -6,6 +6,8 @@ export const STORAGE_KEYS = {
   extraInstructions: "xai_extra_instructions",
   model: "xai_model",
   active: "gc_active",
+  /** The account these conversations belong to, so a different one starts clean. */
+  account: "gc_account",
   prefs: "gc_prefs",
   conversations: "gc_conversations",
 };

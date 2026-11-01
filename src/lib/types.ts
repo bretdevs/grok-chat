@@ -26,6 +26,26 @@ export type ApiEndpoint = {
   /** Whether turns are linked with previous_response_id; otherwise the full history is sent each time. */
   chain: boolean;
 };
+/** The signed-in account, as the browser is allowed to see it. */
+export type AuthAccount = {
+  email: string;
+  admin: boolean;
+  /** Messages per day on the server's key; 0 means no limit. */
+  dailyLimit: number;
+  usedToday: number;
+};
+export type AuthInfo = {
+  /** Sign-in stands in front of the app on this server. */
+  required: boolean;
+  /** False when accounts are required but the database is not answering. */
+  ready: boolean;
+  /** The server has its own API key, so signed-in people do not need one. */
+  serverKey: boolean;
+  openSignup: boolean;
+  needsCode: boolean;
+  account: AuthAccount | null;
+};
+
 export const MAX_CONVERSATIONS = 30;
 export const MAX_MESSAGES = 200;
 

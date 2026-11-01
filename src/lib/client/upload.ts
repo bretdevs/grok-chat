@@ -15,7 +15,8 @@ export function uploadToXai(blob: Blob, name: string, opts: { apiKey: string; si
     if (opts.signal.aborted) return reject(new DOMException("Aborted", "AbortError"));
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/upload?target=xai");
-    xhr.setRequestHeader("x-xai-key", opts.apiKey);
+    // Left out when the visitor has no key of their own, so the server uses the one it pays with.
+    if (opts.apiKey) xhr.setRequestHeader("x-xai-key", opts.apiKey);
     xhr.setRequestHeader("x-file-name", encodeURIComponent(name));
     xhr.setRequestHeader("content-type", blob.type || "application/octet-stream");
     xhr.upload.onprogress = (e) => {

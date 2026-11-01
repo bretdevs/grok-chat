@@ -4,7 +4,7 @@ import { ArrowDown, Menu, Plus, Upload } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { prepareImage } from "@/lib/client/images";
 import { useChat, type PendingFile } from "@/lib/client/use-chat";
-import { MAX_SANDBOX_FILE_BYTES, type ApiEndpoint, type ChatMessage } from "@/lib/types";
+import { MAX_SANDBOX_FILE_BYTES, type ApiEndpoint, type AuthInfo, type ChatMessage } from "@/lib/types";
 import { uid } from "@/lib/utils";
 import { Composer } from "./Composer";
 import { Message } from "./Message";
@@ -18,9 +18,9 @@ const BLOCKED = /\.(exe|dll|msi|scr|com|bat|cmd)$/i;
 const MAX_ATTACHMENTS = 10;
 const NO_MESSAGES: ChatMessage[] = [];
 
-export default function Chat({ endpoint }: { endpoint: ApiEndpoint }) {
+export default function Chat({ endpoint, auth }: { endpoint: ApiEndpoint; auth: AuthInfo }) {
   const { toasts, push: notify, dismiss } = useToasts();
-  const chat = useChat(notify, endpoint);
+  const chat = useChat(notify, endpoint, auth);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<PendingFile[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -174,7 +174,7 @@ export default function Chat({ endpoint }: { endpoint: ApiEndpoint }) {
       conversations={chat.conversations}
       activeId={chat.activeId}
       running={chat.runs}
-      keyMissing={!chat.apiKey}
+      keyMissing={!chat.keyReady}
       onSelect={(id) => {
         chat.select(id);
         onClose?.();
@@ -233,7 +233,8 @@ export default function Chat({ endpoint }: { endpoint: ApiEndpoint }) {
           <div className="mx-auto w-full max-w-3xl px-4 py-6">
             {messages.length === 0 ? (
               <EmptyState
-                hasKey={Boolean(chat.apiKey)}
+                hasKey={chat.keyReady}
+                serverPays={chat.serverPays}
                 customEndpoint={chat.endpoint.custom}
                 search={chat.searchOn}
                 agent={chat.agentOn}
@@ -312,12 +313,14 @@ export default function Chat({ endpoint }: { endpoint: ApiEndpoint }) {
 
 function EmptyState({
   hasKey,
+  serverPays,
   customEndpoint,
   search,
   agent,
   onAddKey,
 }: {
   hasKey: boolean;
+  serverPays: boolean;
   customEndpoint: boolean;
   search: boolean;
   agent: boolean;
@@ -327,7 +330,9 @@ function EmptyState({
   return (
     <div className="flex min-h-[55vh] flex-col items-center justify-center px-2 text-center">
       <h2 className="text-2xl font-semibold tracking-tight text-zinc-100">Grok Chat</h2>
-      <p className="mt-2 max-w-md text-sm text-zinc-400">Chat with Grok using your own {keyName}. Attach documents and images.</p>
+      <p className="mt-2 max-w-md text-sm text-zinc-400">
+        {serverPays ? "Ask anything. Attach documents and images." : `Chat with Grok using your own ${keyName}. Attach documents and images.`}
+      </p>
       {(search || agent) && (
         <div className="mt-3 space-y-1 text-sm text-zinc-500">
           {search && <p>Live web and X search are on.</p>}

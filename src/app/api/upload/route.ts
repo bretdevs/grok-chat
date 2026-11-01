@@ -1,5 +1,7 @@
 import { connectSandbox, getSandbox } from "@/lib/agent/sandbox";
 import { cancelSandboxUpload, finishSandboxUpload, prepareSandboxUploads, writeSandboxChunk } from "@/lib/agent/uploads";
+import { serverApiKey } from "@/lib/auth/config";
+import { requireAccount } from "@/lib/auth/gate";
 import { mimeFromName } from "@/lib/mime";
 import type { ErrorSource } from "@/lib/types";
 import { uploadLimits } from "@/lib/upload-limits";
@@ -29,6 +31,8 @@ export async function POST(req: Request) {
   const target = url.searchParams.get("target");
   const step = url.searchParams.get("step");
   try {
+    const denied = await requireAccount(req);
+    if (denied) return fail(denied.status, denied.message, denied.code === "xai_key_missing" ? "xai" : "server");
     if (target === "xai") return await toXai(req);
     if (target === "sandbox" && step === "begin") return await begin(req);
     if (target === "sandbox" && step === "chunk") return await chunk(req, url);
@@ -42,7 +46,8 @@ export async function POST(req: Request) {
 }
 
 async function toXai(req: Request) {
-  const apiKey = req.headers.get("x-xai-key")?.trim();
+  // The visitor's own key if they added one, otherwise the key this server pays with.
+  const apiKey = req.headers.get("x-xai-key")?.trim() || serverApiKey();
   if (!apiKey) return fail(401, "Missing xAI API key. Add it in Settings.", "xai");
   const { xaiFileBytes } = uploadLimits();
   if (declaredSize(req) > xaiFileBytes) return fail(413, `xAI accepts documents up to ${formatBytes(xaiFileBytes)}.`);

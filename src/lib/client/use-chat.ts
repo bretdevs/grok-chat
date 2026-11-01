@@ -15,6 +15,7 @@ import {
   type ApiEndpoint,
   type ApiMessage,
   type Attachment,
+  type AuthInfo,
   type ChatMessage,
   type Conversation,
   type ErrorSource,
@@ -70,15 +71,18 @@ const DEFAULT_LIMITS: UploadLimits = {
 export const imageKey = (attachmentId: string) => `img:${attachmentId}`;
 const docTextKey = (attachmentId: string) => `doc:${attachmentId}`;
 
-/** `endpoint` comes from the server render, so key wording is right before /api/config answers. */
-export function useChat(notify: Notify, endpoint: ApiEndpoint) {
+/** `endpoint` and `auth` come from the server render, so key wording is right before /api/config answers. */
+export function useChat(notify: Notify, endpoint: ApiEndpoint, initialAuth: AuthInfo) {
+  const [auth, setAuth] = useState(initialAuth);
   const [apiKey, setApiKeyState] = useState(() => readString(STORAGE_KEYS.xaiKey));
   const [e2bKey, setE2bKeyState] = useState(() => readString(STORAGE_KEYS.e2bKey));
   const [extraInstructions, setExtraState] = useState(() => readString(STORAGE_KEYS.extraInstructions));
   const [model, setModelState] = useState(() => readString(STORAGE_KEYS.model) || DEFAULT_MODEL);
   const [prefs, setPrefsState] = useState<Prefs>(readPrefs);
-  const [conversations, setConversations] = useState<Conversation[]>(loadConversations);
-  const [activeId, setActiveId] = useState<string | null>(() => readString(STORAGE_KEYS.active) || null);
+  // Runs once, before the stored conversations are read.
+  const [newAccount] = useState(() => claimBrowser(initialAuth));
+  const [conversations, setConversations] = useState<Conversation[]>(() => (newAccount ? [] : loadConversations()));
+  const [activeId, setActiveId] = useState<string | null>(() => (newAccount ? null : readString(STORAGE_KEYS.active) || null));
   const [serverE2b, setServerE2b] = useState(false);
   const [limits, setLimits] = useState<UploadLimits>(DEFAULT_LIMITS);
   const [runs, setRuns] = useState<Record<string, RunState>>({});
@@ -93,6 +97,18 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
 
   const active = conversations.find((c) => c.id === activeId) ?? null;
   const sorted = useMemo(() => [...conversations].sort((a, b) => b.updatedAt - a.updatedAt), [conversations]);
+
+  // With a server key, a signed-in visitor needs no key of their own.
+  const serverPays = auth.serverKey && (!auth.required || Boolean(auth.account));
+  const keyReady = Boolean(apiKey) || serverPays;
+
+  /** Picks up today's message count after a turn, and the account after signing out elsewhere. */
+  const refreshAuth = useCallback(() => {
+    void fetch("/api/auth/me", { cache: "no-store" })
+      .then((res) => (res.ok ? (res.json() as Promise<AuthInfo>) : null))
+      .then((info) => info && setAuth(info))
+      .catch(() => undefined);
+  }, []);
 
   const persist = useCallback(
     (list: Conversation[]) => {
@@ -121,6 +137,7 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
     writeString(STORAGE_KEYS.active, activeId ?? "");
   }, [activeId]);
 
+
   useEffect(() => {
     let alive = true;
     fetchServerConfig()
@@ -128,6 +145,7 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
         if (!alive) return;
         setServerE2b(config.e2bServerKey);
         if (config.uploads) setLimits(config.uploads);
+        if (config.auth) setAuth(config.auth);
       })
       .catch(() => undefined);
     // Drop stored blobs that no conversation points at any more.
@@ -172,7 +190,16 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
   };
 
   const onTurnError = (status: number | undefined, source: ErrorSource | undefined, message: string) => {
+    if (status === 429) {
+      refreshAuth();
+      return;
+    }
     if (status !== 401) return;
+    // The session expired or was signed out elsewhere; the page itself decides what to show.
+    if (auth.required && source === "server") {
+      window.location.reload();
+      return;
+    }
     if (source === "e2b") openSettings("e2b", message || "E2B rejected this API key.");
     else openSettings("xai", `${endpoint.custom ? endpoint.host : "xAI"} rejected this API key. Enter a valid key.`);
   };
@@ -341,6 +368,7 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
         delete next[conv.id];
         return next;
       });
+      if (serverPays && !apiKey) refreshAuth();
     }
   };
 
@@ -369,7 +397,7 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
   const send = (text: string, pending: PendingFile[]): boolean => {
     const trimmed = text.trim();
     if (!trimmed && !pending.length) return false;
-    if (!apiKey) {
+    if (!keyReady) {
       openSettings("xai", endpoint.custom ? "Add your API key to start." : "Add your xAI API key to start.");
       return false;
     }
@@ -512,6 +540,10 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
   return {
     apiKey,
     setApiKey,
+    keyReady,
+    serverPays,
+    auth,
+    refreshAuth,
     e2bKey,
     setE2bKey,
     serverE2b,
@@ -547,6 +579,22 @@ export function useChat(notify: Notify, endpoint: ApiEndpoint) {
 }
 
 export type ChatState = ReturnType<typeof useChat>;
+
+/**
+ * Conversations live in this browser, not on the server, so on a shared device the next account
+ * must not find the last one's chats. True when the stored chats belonged to someone else.
+ */
+function claimBrowser(auth: AuthInfo): boolean {
+  if (!auth.required) return false;
+  const email = auth.account?.email ?? "";
+  const previous = readString(STORAGE_KEYS.account);
+  if (previous === email) return false;
+  writeString(STORAGE_KEYS.account, email);
+  // Nothing to clear the first time an account signs in on a browser that was bring-your-own-key.
+  if (!previous) return false;
+  void listBlobKeys().then(deleteBlobs);
+  return true;
+}
 
 /** The previous reply's response id, when the next turn can continue that chain. */
 function chainFrom(history: ChatMessage[], flags: TurnFlags) {

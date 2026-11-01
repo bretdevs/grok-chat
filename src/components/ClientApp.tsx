@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import type { ApiEndpoint } from "@/lib/types";
+import type { ApiEndpoint, AuthInfo } from "@/lib/types";
 
 // Everything lives in localStorage / IndexedDB, so the chat renders only in the browser.
 const Chat = dynamic(() => import("./Chat"), {
@@ -9,6 +9,6 @@ const Chat = dynamic(() => import("./Chat"), {
   loading: () => <div className="h-dvh bg-[#0b0b0c]" />,
 });
 
-export function ClientApp({ endpoint }: { endpoint: ApiEndpoint }) {
-  return <Chat endpoint={endpoint} />;
+export function ClientApp({ endpoint, auth }: { endpoint: ApiEndpoint; auth: AuthInfo }) {
+  return <Chat endpoint={endpoint} auth={auth} />;
 }

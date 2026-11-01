@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { after } from "next/server";
 import { runAgent } from "@/lib/agent/loop";
+import { authorize, claim } from "@/lib/auth/gate";
+import { meterStream } from "@/lib/auth/usage";
 import { UPLOAD_DIR } from "@/lib/sandbox-paths";
 import { createEventStream } from "@/lib/sse";
 import { DEFAULT_MODEL, MAX_XAI_FILE_BYTES, type ApiMessage } from "@/lib/types";
@@ -33,8 +35,9 @@ export async function POST(req: Request) {
     return typeof value === "string" ? value.trim() : "";
   };
 
-  const apiKey = field("apiKey");
-  if (!apiKey) return fail(401, "Missing xAI API key. Add it in Settings.", "xai_key_missing");
+  // Either a signed-in account spending the server's key, or a visitor's own key.
+  const access = await authorize(req, field("apiKey"));
+  if (!access.ok) return fail(access.status, access.message, access.code);
 
   let messages: ApiMessage[];
   try {
@@ -71,13 +74,18 @@ export async function POST(req: Request) {
     retryModel: pick(field("retryModel"), MODEL) ?? "grok-4-fast",
   };
 
+  // Claimed once the turn is going to run, so a rejected request costs nothing.
+  const spent = await claim(access).catch(() => null);
+  if (spent) return fail(spent.status, spent.message, spent.code);
+
   const abort = new AbortController();
   req.signal?.addEventListener("abort", () => abort.abort(), { once: true });
-  const sse = createEventStream(() => abort.abort());
+  const raw = createEventStream(() => abort.abort());
+  const sse = access.metered && access.user ? meterStream(raw, access.user.id) : raw;
   const heartbeat = setInterval(() => sse.ping(), 15_000);
 
   const ctx: TurnContext = {
-    client: createXai(apiKey, conversationId),
+    client: createXai(access.apiKey, conversationId),
     model: pick(field("model"), MODEL) ?? DEFAULT_MODEL,
     conversationId,
     history: messages.slice(0, -1),

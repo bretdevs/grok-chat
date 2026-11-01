@@ -1,5 +1,5 @@
 import { readEvents } from "@/lib/sse";
-import type { ApiMessage, ErrorSource, ReasoningEffort, StreamEvent, UploadLimits } from "@/lib/types";
+import type { ApiMessage, AuthInfo, ErrorSource, ReasoningEffort, StreamEvent, UploadLimits } from "@/lib/types";
 
 export type ChatRequest = {
   apiKey: string;
@@ -36,7 +36,8 @@ export class RequestError extends Error {
 
 export async function* streamChat(r: ChatRequest): AsyncGenerator<StreamEvent> {
   const form = new FormData();
-  form.set("apiKey", r.apiKey);
+  // Left out when the visitor has no key of their own, so the server uses the one it pays with.
+  if (r.apiKey) form.set("apiKey", r.apiKey);
   form.set("model", r.model);
   form.set("conversationId", r.conversationId);
   form.set("messages", JSON.stringify(r.messages));
@@ -117,7 +118,7 @@ async function sandboxAction(action: "kill" | "pause", sandboxId: string, e2bKey
   }
 }
 
-export type ServerConfig = { e2bServerKey: boolean; uploads?: UploadLimits };
+export type ServerConfig = { e2bServerKey: boolean; uploads?: UploadLimits; auth?: AuthInfo };
 
 export async function fetchServerConfig(): Promise<ServerConfig> {
   const res = await fetch("/api/config", { cache: "no-store" });

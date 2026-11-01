@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ChatState } from "@/lib/client/use-chat";
 import { MODELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { AccountSection } from "./AccountSection";
 
 export function SettingsDrawer({ chat }: { chat: ChatState }) {
   const { settings, closeSettings, prefs, updatePrefs } = chat;
@@ -29,6 +30,8 @@ export function SettingsDrawer({ chat }: { chat: ChatState }) {
         <div className="flex-1 space-y-7 overflow-y-auto px-5 py-5 pb-[max(env(safe-area-inset-bottom),1.25rem)]">
           {settings.error && <p className="rounded-lg border border-amber-900/50 bg-amber-950/30 px-3 py-2 text-sm text-amber-200">{settings.error}</p>}
 
+          {chat.auth.account && <AccountSection account={chat.auth.account} onRefresh={chat.refreshAuth} />}
+
           <Section title="API keys">
             <KeyField
               id="xai-key"
@@ -36,10 +39,12 @@ export function SettingsDrawer({ chat }: { chat: ChatState }) {
               value={chat.apiKey}
               onSave={chat.setApiKey}
               placeholder={chat.endpoint.custom ? "Your key" : "xai-…"}
-              autoFocus={settings.focus === "xai" || (!settings.focus && !chat.apiKey)}
+              autoFocus={settings.focus === "xai" || (!settings.focus && !chat.keyReady)}
               warn={(v) => (!chat.endpoint.custom && v && !v.startsWith("xai-") ? "xAI keys usually start with xai-." : "")}
               hint={
-                chat.endpoint.custom ? (
+                chat.serverPays ? (
+                  <>This server has its own key, so you only need one here to use your own instead, with no daily limit.</>
+                ) : chat.endpoint.custom ? (
                   <>This server sends requests to {chat.endpoint.host}, so use a key from that provider.</>
                 ) : (
                   <>
