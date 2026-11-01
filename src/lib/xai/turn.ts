@@ -1,5 +1,5 @@
 import type OpenAI from "openai";
-import type { ApiMessage, Source, Usage } from "@/lib/types";
+import type { ApiMessage, ReasoningEffort, Source, Usage } from "@/lib/types";
 import type { EventStream } from "@/lib/sse";
 import type { BuiltinOptions } from "./builtin-tools";
 import { inlineCitationUrls, mergeSources } from "./citations";
@@ -12,6 +12,8 @@ export type TurnSettings = {
   extraInstructions?: string;
   submitResult: boolean;
   networkRetry: boolean;
+  reasoningEffort: ReasoningEffort;
+  retryModel: string;
 };
 
 export type TurnContext = {
