@@ -36,4 +36,4 @@ export function transformOutput(text: string): string {
   let out = text;
   for (const p of PREFILLS) out = stripEchoedPrefix(out, p);
   return trimHedge(out);
-}v
+}
