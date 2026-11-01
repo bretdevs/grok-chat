@@ -1,5 +1,5 @@
 import { readEvents } from "@/lib/sse";
-import type { ApiMessage, ErrorSource, StreamEvent, UploadLimits } from "@/lib/types";
+import type { ApiMessage, ErrorSource, ReasoningEffort, StreamEvent, UploadLimits } from "@/lib/types";
 
 export type ChatRequest = {
   apiKey: string;
@@ -14,9 +14,10 @@ export type ChatRequest = {
   extraInstructions?: string;
   submitResult: boolean;
   networkRetry: boolean;
+  reasoningEffort?: ReasoningEffort;
+  retryModel?: string;
   messages: ApiMessage[];
   files: { key: string; blob: Blob; name: string }[];
-  /** Agent mode: files already uploaded into the sandbox for this turn. */
   sandboxFiles?: { path: string; bytes: number }[];
   previous?: { responseId: string; promptVersion: string; openCallIds?: string[] };
   signal: AbortSignal;
@@ -33,7 +34,6 @@ export class RequestError extends Error {
   }
 }
 
-/** POSTs a turn to /api/chat and yields its server-sent events. */
 export async function* streamChat(r: ChatRequest): AsyncGenerator<StreamEvent> {
   const form = new FormData();
   form.set("apiKey", r.apiKey);
@@ -55,6 +55,8 @@ export async function* streamChat(r: ChatRequest): AsyncGenerator<StreamEvent> {
   if (r.extraInstructions) form.set("extraInstructions", r.extraInstructions);
   form.set("submitResult", r.submitResult ? "1" : "0");
   form.set("networkRetry", r.networkRetry ? "1" : "0");
+  form.set("reasoningEffort", r.reasoningEffort ?? "low");
+  form.set("retryModel", r.retryModel ?? "grok-4-fast");
   if (r.previous) {
     form.set("previousResponseId", r.previous.responseId);
     form.set("promptVersion", r.previous.promptVersion);
@@ -85,7 +87,7 @@ async function httpError(res: Response): Promise<RequestError> {
     message = body.error?.message ?? "";
     code = body.error?.code ?? "";
   } catch {
-    // not JSON, e.g. a hosting platform error page
+    /* not JSON */
   }
   if (res.status === 413 || /PAYLOAD_TOO_LARGE/.test(raw)) {
     return new RequestError(
