@@ -1,5 +1,5 @@
 const GREETING =
-  /^(hi|hey|hello|yo|sup|hola|thanks|thank you|ok|okay|yes|no|ping|test|hola)\b[\s!.,?😀-🙏]*$/i;
+  /^(hi|hey|hello|yo|sup|hola|thanks|thank you|ok|okay|yes|no|ping|test)\b[\s!.,?😀-🙏]*$/i;
 
 export function isGreeting(q: string): boolean {
   return GREETING.test(q.trim());
