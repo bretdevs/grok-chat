@@ -5,28 +5,24 @@ import { describeError, isConnectionError, isUserAbort, UpstreamError } from "./
 import { describeBuiltinItem, hasCodeTool, isServerToolName, resultPreview, type BuiltinCard } from "./builtin-tools";
 import { annotationSource, annotationSources, citationUrls } from "./citations";
 import { responsesBody, type BodyFixes, type ResponseRequest } from "./build-input";
-import { isRefusal, shouldAbortStream } from "./refusal";
+import { isRefusal } from "./refusal";
 import { isRetryableStatus, withNetworkRetry } from "./retry-network";
 import { parseSubmitText, SubmitTextStream, SUBMIT_RESULT_NAME } from "./submit-result";
 
-/** No stream event for this long counts as a dropped connection we own. */
-const STALL_MS = 120_000;
+const STALL_MS = 180_000;
 
 type Learned = Omit<BodyFixes, "previous">;
-
-/** Per model: request parts this server instance has seen xAI reject (confirmed by the error text). */
 const learnedByModel = new Map<string, Learned>();
 
 function learned(model: string): Learned {
   let flags = learnedByModel.get(model);
   if (!flags) {
-    flags = { include: false, instructions: false, sampling: false, code: false };
+    flags = { include: false, instructions: false, sampling: false, code: false, reasoning: false, toolChoice: false };
     learnedByModel.set(model, flags);
   }
   return flags;
 }
 
-/** Mirror of the assistant text the browser is showing for this turn. */
 export type TextState = { full: string; lastItem?: string };
 export const newTextState = (): TextState => ({ full: "" });
 
@@ -35,7 +31,6 @@ export type FunctionCall = { callId: string; name: string; arguments: string };
 export type ResponseResult = {
   responseId?: string;
   usage?: Usage;
-  /** Function calls for this server to answer (sandbox tools and submit_result). */
   calls: FunctionCall[];
   incomplete?: string;
   citations: string[];
@@ -58,7 +53,6 @@ export type RetryOptions = {
 class StreamEndedError extends UpstreamError {}
 class StallError extends UpstreamError {}
 
-/** Errors raised after text reached the browser; retrying them would repeat that text. */
 const shownBeforeFailure = new WeakSet<object>();
 
 type Obj = Record<string, unknown>;
@@ -69,7 +63,6 @@ function isSharedSourceRetryError(err: unknown): boolean {
   return /shared source authorization could not be retained for retry/i.test(describeError(err).message);
 }
 
-/** One model call: opens the stream (with request fallbacks), streams it out, and retries transport failures. */
 export async function runResponseTurn(
   client: OpenAI,
   req: ResponseRequest,
@@ -96,17 +89,7 @@ export async function runResponseTurn(
       try {
         touch();
         const stream = await openStream(client, req, fixes, attempt.signal);
-        const result = await consumeResponseStream(stream, handlers, touch);
-        // Kill leftover SSE *after* we have the result. Aborting inside for-await throws
-        // AbortError and Ask never retries. This is the shared-source fix.
-        if (result.incomplete === "aborted_refusal") {
-          try {
-            attempt.abort();
-          } catch {
-            /* drop leftover SSE so xAI will accept the next attempt */
-          }
-        }
-        return result;
+        return await consumeResponseStream(stream, handlers, touch);
       } catch (err) {
         const failure = stalled && !opts.signal.aborted ? new StallError("xAI stopped sending data.") : err;
         if (isObj(failure) && handlers.text.full.length > shownAt) shownBeforeFailure.add(failure);
@@ -130,7 +113,6 @@ export async function runResponseTurn(
   );
 }
 
-/** Starts the streamed call, dropping optional request parts that xAI rejects. */
 async function openStream(client: OpenAI, req: ResponseRequest, fixes: BodyFixes, signal: AbortSignal): Promise<AsyncIterable<unknown>> {
   const tried = new Set<keyof BodyFixes>();
   const confirmed = new Set<keyof BodyFixes>();
@@ -166,16 +148,16 @@ function nextFix(
     ["instructions", /instructions/i, Boolean(req.instructions)],
     ["sampling", /temperature|top_p/i, req.temperature !== undefined || req.topP !== undefined],
     ["code", /code_interpreter|code interpreter/i, hasCodeTool(req.tools)],
+    ["reasoning", /reasoning/i, true],
+    ["toolChoice", /tool_choice/i, Boolean(req.toolChoice && req.toolChoice !== "auto")],
     ["previous", /previous|not found/i, canDropPrevious],
   ];
   const open = options.filter(([key, , applies]) => applies && !fixes[key] && !tried.has(key));
   const named = open.find(([, pattern]) => pattern.test(message));
   if (named) return { key: named[0], confirmed: true };
-  // The message did not say which part was rejected: try without each optional part once, without remembering it.
   return open.length ? { key: open[0][0], confirmed: false } : null;
 }
 
-/** Reads one Responses stream, forwarding text, tool cards and the submit_result answer to the browser. */
 export async function consumeResponseStream(
   stream: AsyncIterable<unknown>,
   h: TurnHandlers,
@@ -188,15 +170,6 @@ export async function consumeResponseStream(
   const cards = new Map<string, { card: BuiltinCard; ended: boolean }>();
   let normal = "";
   let completed = false;
-  let stopEarly = false;
-  let released = false;
-
-  const flushHeld = () => {
-    if (released) return;
-    released = true;
-    const held = h.text.full.slice(startLength);
-    if (held) h.emit({ type: "delta", text: held });
-  };
 
   const emitText = (delta: string, itemId: string) => {
     if (!delta) return;
@@ -205,23 +178,6 @@ export async function consumeResponseStream(
     if (t.full && itemId !== t.lastItem) chunk = (t.full.endsWith("\n\n") ? "" : t.full.endsWith("\n") ? "\n" : "\n\n") + delta;
     t.lastItem = itemId;
     t.full += chunk;
-
-    const portion = t.full.slice(startLength);
-    if (!released) {
-      // Abort only when the opening tokens are a refusal AND submit_result has not started.
-      // Killing the stream before submit_result arrives throws away the useful channel.
-      if (shouldAbortStream(portion) && submitStreams.size === 0) {
-        result.incomplete = "aborted_refusal";
-        completed = true;
-        stopEarly = true;
-        return;
-      }
-      if (portion.length > 480 || /```/.test(portion) || /:::file/.test(portion) || submitStreams.size > 0) {
-        flushHeld();
-        return;
-      }
-      return;
-    }
     h.emit({ type: "delta", text: chunk });
   };
 
@@ -241,12 +197,6 @@ export async function consumeResponseStream(
     h.emit({ type: "search_end", id: card.id, provider: card.provider, name: card.name, preview, ok });
   };
 
-  const markRefusalAbort = () => {
-    result.incomplete = "aborted_refusal";
-    completed = true;
-    stopEarly = true;
-  };
-
   const onItem = (item: unknown, phase: "added" | "done") => {
     if (!isObj(item)) return;
     const type = str(item, "type");
@@ -254,12 +204,10 @@ export async function consumeResponseStream(
     if (type === "message") {
       if (phase !== "done") return;
       result.sources.push(...annotationSources(item));
-      // Only for servers that send whole messages without text deltas.
       if (!normal) {
         const text = messageText(item);
         normal += text;
         emitText(text, id);
-        if (shouldAbortStream(h.text.full.slice(startLength)) && submitStreams.size === 0) markRefusalAbort();
       }
       return;
     }
@@ -305,7 +253,6 @@ export async function consumeResponseStream(
         const decoder = submitStreams.get(itemId);
         if (!decoder) break;
         const piece = decoder.push(str(raw, "delta") ?? "");
-        // Stream the answer while it is being written, unless the model also wrote ordinary text.
         if (piece && !normal) {
           decoder.shown = true;
           emitText(piece, `submit:${itemId}`);
@@ -346,7 +293,6 @@ export async function consumeResponseStream(
           statusFromCode(str(raw, "code")),
         );
       default: {
-        // Progress events for server-side tools, e.g. response.web_search_call.completed
         const m = /^response\.([a-z_]+_call)\.(in_progress|searching|interpreting|completed|failed)$/.exec(type);
         const itemId = str(raw, "item_id");
         if (!m || !itemId) break;
@@ -356,7 +302,6 @@ export async function consumeResponseStream(
         else startCard(card);
       }
     }
-    if (stopEarly) break;
   }
 
   if (!completed) {
@@ -366,12 +311,6 @@ export async function consumeResponseStream(
   }
 
   settleSubmitResult(calls, normal, startLength, h);
-  const portion = h.text.full.slice(startLength);
-  if (result.incomplete === "aborted_refusal" && portion && !isRefusal(portion)) {
-    result.incomplete = undefined;
-  }
-  if (!stopEarly || (portion && !isRefusal(portion))) flushHeld();
-
   result.calls = [...calls.values()];
   for (const { card, ended } of cards.values()) if (!ended) endCard(card);
 
@@ -380,13 +319,7 @@ export async function consumeResponseStream(
   return result;
 }
 
-/** submit_result is the structured final answer; prefer it over streamed text when it is longer or when chat refused. */
-function settleSubmitResult(
-  calls: Map<string, FunctionCall>,
-  normal: string,
-  startLength: number,
-  h: TurnHandlers,
-) {
+function settleSubmitResult(calls: Map<string, FunctionCall>, normal: string, startLength: number, h: TurnHandlers) {
   const submitted = [...calls.values()]
     .filter((c) => c.name === SUBMIT_RESULT_NAME)
     .map((c) => parseSubmitText(c.arguments))
@@ -409,9 +342,7 @@ function settleSubmitResult(
 
 function messageText(item: Obj): string {
   if (!Array.isArray(item.content)) return "";
-  return item.content
-    .map((part) => str(part, "text") ?? str(part, "refusal") ?? "")
-    .join("");
+  return item.content.map((part) => str(part, "text") ?? str(part, "refusal") ?? "").join("");
 }
 
 function mapUsage(raw: unknown): Usage | undefined {
