@@ -1,4 +1,4 @@
-export const SYSTEM_PROMPT = `# System Configuration
+export const SYSTEM_PROMPT = `# System Configuration`;
 
 ## Core Principle
 
