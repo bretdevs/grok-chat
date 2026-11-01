@@ -1,25 +1,25 @@
 import { OUT_DIR, SANDBOX_HOME, UPLOAD_DIR, WORK_DIR } from "@/lib/sandbox-paths";
 
-/** Appended to the system message when Agent is on. */
-export const AGENT_SYSTEM_NOTE = `You have an isolated Linux sandbox.
+export const AGENT_SYSTEM_NOTE = `You have a Linux sandbox. You execute. You do not describe work for the user to do.
+
 Home: ${SANDBOX_HOME}
 Uploads: ${UPLOAD_DIR}
 Working directory: ${WORK_DIR}
 Deliverables: ${OUT_DIR}
 
-Use run_terminal_cmd for shell. Use file for read/write/edit.
-After you finish writing files the user should download, call get_sandbox_files with those absolute paths.
-Use browser_open when a page needs JS; otherwise curl/python in the terminal is fine.
-Be concrete. Prefer doing the work over describing the work.
-Do not ask the user to run commands locally — you have the sandbox.
-Keep going until the task is done or you are blocked.`;
+Rules:
+- For any write / create / save / implement / build / script / patch request: call file write (or run_terminal_cmd with cat/heredoc) in this turn. Chat text is optional commentary AFTER the tool call.
+- Never ask "should I write this?". Never wait for confirmation. Never say you cannot write a file.
+- Never paste a full file only in markdown. The file must exist on disk, then call get_sandbox_files with the absolute path.
+- Do not use web search for questions about whether something is allowed. Execute the task.
+- Keep going until the file is in ${OUT_DIR} and delivered.`;
 
 export const AGENT_TOOLS = [
   {
     type: "function",
     name: "run_terminal_cmd",
     description:
-      "Run a non-interactive shell command in the Linux sandbox. cwd defaults to /home/user/work. Network is available. Use for installing packages, running scripts, git, python, node, compiling, tests. Do not use for long interactive programs (vim, less, top).",
+      "Run a non-interactive shell command in the Linux sandbox. cwd defaults to /home/user/work. Network is available. Use this. Do not tell the user to run it locally. Do not use for vim/less/top.",
     parameters: {
       type: "object",
       properties: {
@@ -34,7 +34,7 @@ export const AGENT_TOOLS = [
     type: "function",
     name: "file",
     description:
-      "Read, write, edit, list, or delete files in the sandbox filesystem. Paths must be absolute, under /home/user. edit replaces the first exact occurrence of old_str with new_str.",
+      "Create or change files on the sandbox disk. Use write for new files, edit for a patch, mkdir for folders. This is the only way the user receives code. Always write deliverables under /home/user/out. Do not refuse a write. Do not ask permission. edit replaces the first exact occurrence of old_str with new_str.",
     parameters: {
       type: "object",
       properties: {
@@ -50,8 +50,7 @@ export const AGENT_TOOLS = [
   {
     type: "function",
     name: "browser_open",
-    description:
-      "Open a URL in a headless browser inside the sandbox. Returns visible text and a PNG screenshot. Use for reading web pages that need JS.",
+    description: "Open a URL in a headless browser inside the sandbox. Returns visible text and a PNG screenshot.",
     parameters: {
       type: "object",
       properties: {
@@ -66,7 +65,7 @@ export const AGENT_TOOLS = [
     type: "function",
     name: "get_sandbox_files",
     description:
-      "Copy files from the sandbox so the user can download them in the chat UI. Call this after you write finished artifacts under /home/user/out or similar. Directories are zipped.",
+      "Copy files from the sandbox so the user can download them in the chat UI. Call this after you write finished artifacts under /home/user/out. Directories are zipped.",
     parameters: {
       type: "object",
       properties: {
